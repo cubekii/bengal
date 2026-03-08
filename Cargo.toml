@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = [
+    "compiler",
+    "sparkler",
+    "std",
+    ".",
+]
+
+[package]
+name = "bengal-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Bengal language CLI"
+
+[[bin]]
+name = "bengal"
+path = "src/main.rs"
+
+[dependencies]
+bengal-compiler = { path = "compiler" }
+sparkler = { path = "sparkler" }

@@ -1,0 +1,9 @@
+package std.io
+
+fn print(text: str) {
+  C.bengal_print(text)
+}
+
+fn println(line: str) {
+  C.bengal_println(line)
+}

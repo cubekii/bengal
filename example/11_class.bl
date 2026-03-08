@@ -1,0 +1,22 @@
+import std::io
+
+class SomeObject {
+  some_int: int = 10
+  some_float: float = 5.0
+  some_string: str = "Default string"
+
+  private some_private: bool = false
+
+  fn someMethod(): str? {
+    if (!some_private) {
+      some_private = true
+      return null
+    }
+    return some_string
+  }
+}
+
+let some_object = SomeObject()
+
+println("Call 1: ${some_object.someMethod()}")
+println("Call 2: ${some_object.someMethod()}")

@@ -1,0 +1,8 @@
+[package]
+name = "sparkler"
+version = "0.1.0"
+edition = "2021"
+description = "Virtual machine for Bengal language"
+
+[dependencies]
+bengal-std = { path = "../std" }

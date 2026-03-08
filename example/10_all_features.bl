@@ -1,12 +1,12 @@
-fn sum(int x, y) -> int {
+fn sum(int x, y): int {
   return x + y
 }
 
-fn mul(int x, int y) -> int {
+fn mul(int x, int y): int {
   return x * y
 }
 
-fn func() -> int {
+fn func(): int {
   return mul(sum(10, 20), 2)
 }
 

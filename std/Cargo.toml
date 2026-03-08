@@ -1,0 +1,7 @@
+[package]
+name = "bengal-std"
+version = "0.1.0"
+edition = "2021"
+description = "Standard library for Bengal language"
+
+[dependencies]

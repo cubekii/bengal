@@ -1,0 +1,382 @@
+use std::collections::HashMap;
+use bengal_std;
+
+pub struct VM {
+    memory: Vec<u8>,
+    stack: Vec<Value>,
+    pc: usize,
+    strings: Vec<String>,
+    locals: HashMap<String, Value>,
+    classes: HashMap<String, Class>,
+}
+
+#[derive(Clone)]
+pub enum Value {
+    String(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Null,
+    Instance(Instance),
+}
+
+impl PartialEq for Value {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::String(a), Value::String(b)) => a == b,
+            (Value::Int(a), Value::Int(b)) => a == b,
+            (Value::Float(a), Value::Float(b)) => a == b,
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            (Value::Instance(a), Value::Instance(b)) => a.class == b.class,
+            _ => false,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct Instance {
+    pub class: String,
+    pub fields: HashMap<String, Value>,
+}
+
+#[derive(Clone)]
+pub struct Class {
+    pub name: String,
+    pub fields: Vec<String>,
+    pub methods: HashMap<String, Method>,
+}
+
+#[derive(Clone)]
+pub struct Method {
+    pub name: String,
+    pub bytecode: Vec<u8>,
+}
+
+impl VM {
+    pub fn new() -> Self {
+        Self {
+            memory: Vec::new(),
+            stack: Vec::new(),
+            pc: 0,
+            strings: Vec::new(),
+            locals: HashMap::new(),
+            classes: HashMap::new(),
+        }
+    }
+
+    pub fn load(&mut self, bytecode: &[u8], strings: Vec<String>) -> Result<(), String> {
+        self.memory = bytecode.to_vec();
+        self.strings = strings;
+        self.pc = 0;
+        self.stack.clear();
+        Ok(())
+    }
+
+    pub fn run(&mut self) -> Result<(), String> {
+        while self.pc < self.memory.len() {
+            let opcode = self.memory[self.pc];
+            self.execute(opcode)?;
+
+            if opcode == Opcode::Halt as u8 {
+                break;
+            }
+
+            self.pc += 1;
+        }
+        Ok(())
+    }
+
+    fn execute(&mut self, opcode: u8) -> Result<(), String> {
+        match opcode {
+            x if x == Opcode::Nop as u8 => {}
+
+            x if x == Opcode::PushString as u8 => {
+                self.pc += 1;
+                let idx = self.memory[self.pc] as usize;
+                let s = self.strings.get(idx)
+                    .ok_or(format!("Invalid string index: {}", idx))?
+                    .clone();
+                self.stack.push(Value::String(s));
+            }
+
+            x if x == Opcode::PushInt as u8 => {
+                self.pc += 1;
+                let bytes: [u8; 8] = self.memory[self.pc..self.pc + 8]
+                    .try_into()
+                    .map_err(|_| "Invalid int encoding")?;
+                let n = i64::from_le_bytes(bytes);
+                self.stack.push(Value::Int(n));
+                self.pc += 7;
+            }
+
+            x if x == Opcode::PushFloat as u8 => {
+                self.pc += 1;
+                let bytes: [u8; 8] = self.memory[self.pc..self.pc + 8]
+                    .try_into()
+                    .map_err(|_| "Invalid float encoding")?;
+                let n = f64::from_le_bytes(bytes);
+                self.stack.push(Value::Float(n));
+                self.pc += 7;
+            }
+
+            x if x == Opcode::PushBool as u8 => {
+                self.pc += 1;
+                let b = self.memory[self.pc] != 0;
+                self.stack.push(Value::Bool(b));
+            }
+
+            x if x == Opcode::PushNull as u8 => {
+                self.stack.push(Value::Null);
+            }
+
+            x if x == Opcode::LoadLocal as u8 => {
+                self.pc += 1;
+                let idx = self.memory[self.pc] as usize;
+                let name = self.strings.get(idx)
+                    .ok_or(format!("Invalid string index: {}", idx))?
+                    .clone();
+                let value = self.locals.get(&name)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                self.stack.push(value);
+            }
+
+            x if x == Opcode::StoreLocal as u8 => {
+                self.pc += 1;
+                let idx = self.memory[self.pc] as usize;
+                let name = self.strings.get(idx)
+                    .ok_or(format!("Invalid string index: {}", idx))?
+                    .clone();
+                if let Some(value) = self.stack.pop() {
+                    self.locals.insert(name, value);
+                }
+            }
+
+            x if x == Opcode::GetProperty as u8 => {
+                self.pc += 1;
+                let idx = self.memory[self.pc] as usize;
+                let name = self.strings.get(idx)
+                    .ok_or(format!("Invalid string index: {}", idx))?
+                    .clone();
+
+                if let Some(Value::Instance(instance)) = self.stack.pop() {
+                    let value = instance.fields.get(&name)
+                        .cloned()
+                        .unwrap_or(Value::Null);
+                    self.stack.push(value);
+                } else {
+                    return Err("Expected instance for property get".to_string());
+                }
+            }
+
+            x if x == Opcode::SetProperty as u8 => {
+                self.pc += 1;
+                let idx = self.memory[self.pc] as usize;
+                let name = self.strings.get(idx)
+                    .ok_or(format!("Invalid string index: {}", idx))?
+                    .clone();
+
+                let value = self.stack.pop();
+                if let Some(Value::Instance(mut instance)) = self.stack.pop() {
+                    if let Some(v) = value {
+                        instance.fields.insert(name, v);
+                    }
+                    self.stack.push(Value::Instance(instance));
+                } else {
+                    return Err("Expected instance for property set".to_string());
+                }
+            }
+
+            x if x == Opcode::Call as u8 => {
+                self.pc += 1;
+                let func_idx = self.memory[self.pc] as usize;
+                self.pc += 1;
+                let arg_count = self.memory[self.pc] as usize;
+
+                let _func_name = self.strings.get(func_idx)
+                    .ok_or(format!("Invalid function index: {}", func_idx))?
+                    .clone();
+
+                for _ in 0..arg_count {
+                    self.stack.pop();
+                }
+
+                self.stack.push(Value::Null);
+            }
+
+            x if x == Opcode::CallNative as u8 => {
+                self.pc += 1;
+                let native_id = self.memory[self.pc];
+
+                let mut args: Vec<String> = Vec::new();
+                if let Some(value) = self.stack.pop() {
+                    if let Value::String(s) = value {
+                        args.push(s);
+                    }
+                }
+
+                bengal_std::call_native_by_id(native_id, &mut args)?;
+                self.stack.push(Value::Null);
+            }
+
+            x if x == Opcode::Invoke as u8 => {
+                self.pc += 1;
+                let method_idx = self.memory[self.pc] as usize;
+                self.pc += 1;
+                let arg_count = self.memory[self.pc] as usize;
+
+                let _method_name = self.strings.get(method_idx)
+                    .ok_or(format!("Invalid method index: {}", method_idx))?
+                    .clone();
+
+                for _ in 0..arg_count {
+                    self.stack.pop();
+                }
+
+                self.stack.push(Value::Null);
+            }
+
+            x if x == Opcode::Return as u8 => {}
+
+            x if x == Opcode::Jump as u8 => {
+                self.pc += 1;
+                let target = self.memory[self.pc] as usize;
+                self.pc = target.saturating_sub(1);
+            }
+
+            x if x == Opcode::JumpIfTrue as u8 => {
+                self.pc += 1;
+                let target = self.memory[self.pc] as usize;
+                if let Some(Value::Bool(true)) = self.stack.last() {
+                    self.pc = target.saturating_sub(1);
+                }
+            }
+
+            x if x == Opcode::JumpIfFalse as u8 => {
+                self.pc += 1;
+                let target = self.memory[self.pc] as usize;
+                let should_jump = match self.stack.last() {
+                    Some(Value::Bool(false)) => true,
+                    Some(Value::Null) => true,
+                    _ => false,
+                };
+                if should_jump {
+                    self.pc = target.saturating_sub(1);
+                }
+            }
+
+            x if x == Opcode::Equal as u8 => {
+                let right = self.stack.pop().unwrap_or(Value::Null);
+                let left = self.stack.pop().unwrap_or(Value::Null);
+                let result = left == right;
+                self.stack.push(Value::Bool(result));
+            }
+
+            x if x == Opcode::Not as u8 => {
+                if let Some(Value::Bool(b)) = self.stack.pop() {
+                    self.stack.push(Value::Bool(!b));
+                } else {
+                    self.stack.push(Value::Bool(true));
+                }
+            }
+
+            x if x == Opcode::And as u8 => {
+                let right = self.stack.pop().unwrap_or(Value::Null);
+                let left = self.stack.pop().unwrap_or(Value::Null);
+                let result = is_truthy(&left) && is_truthy(&right);
+                self.stack.push(Value::Bool(result));
+            }
+
+            x if x == Opcode::Or as u8 => {
+                let right = self.stack.pop().unwrap_or(Value::Null);
+                let left = self.stack.pop().unwrap_or(Value::Null);
+                let result = is_truthy(&left) || is_truthy(&right);
+                self.stack.push(Value::Bool(result));
+            }
+
+            x if x == Opcode::Concat as u8 => {
+                self.pc += 1;
+                let count = self.memory[self.pc] as usize;
+
+                let mut result = String::new();
+                for _ in 0..count {
+                    if let Some(value) = self.stack.pop() {
+                        match value {
+                            Value::String(s) => result = s + &result,
+                            Value::Int(n) => result = n.to_string() + &result,
+                            Value::Float(n) => result = n.to_string() + &result,
+                            Value::Bool(b) => result = b.to_string() + &result,
+                            Value::Null => result = "null".to_string() + &result,
+                            _ => {}
+                        }
+                    }
+                }
+                self.stack.push(Value::String(result));
+            }
+
+            x if x == Opcode::Pop as u8 => {
+                self.stack.pop();
+            }
+
+            x if x == Opcode::Halt as u8 => {}
+
+            _ => {
+                return Err(format!("Unknown opcode: 0x{:02X}", opcode));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_truthy(value: &Value) -> bool {
+    match value {
+        Value::Bool(false) | Value::Null => false,
+        _ => true,
+    }
+}
+
+impl Default for VM {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[repr(u8)]
+#[allow(dead_code)]
+pub enum Opcode {
+    Nop = 0x00,
+
+    PushString = 0x10,
+    PushInt = 0x11,
+    PushFloat = 0x12,
+    PushBool = 0x13,
+    PushNull = 0x14,
+
+    LoadLocal = 0x20,
+    StoreLocal = 0x21,
+
+    GetProperty = 0x30,
+    SetProperty = 0x31,
+
+    Call = 0x40,
+    CallNative = 0x41,
+    Invoke = 0x42,
+    Return = 0x43,
+
+    Jump = 0x50,
+    JumpIfTrue = 0x51,
+    JumpIfFalse = 0x52,
+
+    Equal = 0x60,
+    NotEqual = 0x61,
+    And = 0x62,
+    Or = 0x63,
+    Not = 0x64,
+    Concat = 0x65,
+
+    Pop = 0x70,
+
+    Halt = 0xFF,
+}
