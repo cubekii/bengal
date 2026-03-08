@@ -1,30 +1,82 @@
 use crate::parser::{Stmt, Expr, Literal, Parser, ClassDef, BinaryOp, UnaryOp, InterpPart};
 use crate::lexer::Lexer;
+use crate::resolver::ModuleResolver;
+use crate::types::TypeContext;
 
 pub type Bytecode = sparkler::executor::Bytecode;
 
 pub struct Compiler {
     source: String,
+    source_path: Option<String>,
+    type_context: Option<TypeContext>,
+}
+
+pub struct CompilerOptions {
+    pub enable_type_checking: bool,
+    pub search_paths: Vec<String>,
+}
+
+impl Default for CompilerOptions {
+    fn default() -> Self {
+        Self {
+            enable_type_checking: true,
+            search_paths: vec!["std".to_string()],
+        }
+    }
 }
 
 impl Compiler {
     pub fn new(source: &str) -> Self {
         Self {
             source: source.to_string(),
+            source_path: None,
+            type_context: None,
+        }
+    }
+
+    pub fn with_path(source: &str, path: &str) -> Self {
+        Self {
+            source: source.to_string(),
+            source_path: Some(path.to_string()),
+            type_context: None,
         }
     }
 
     pub fn compile(&self) -> Result<Bytecode, String> {
+        self.compile_with_options(&CompilerOptions::default())
+    }
+
+    pub fn compile_with_options(&self, options: &CompilerOptions) -> Result<Bytecode, String> {
         let mut lexer = Lexer::new(&self.source);
         let tokens = lexer.tokenize()?;
 
         let mut parser = Parser::new(tokens);
         let statements = parser.parse()?;
 
-        self.generate_code(&statements)
+        let mut type_context = None;
+        if options.enable_type_checking {
+            let mut resolver = ModuleResolver::new();
+
+            for path in &options.search_paths {
+                if let Ok(full_path) = std::path::PathBuf::from(path).canonicalize() {
+                    resolver.add_search_path(full_path);
+                }
+            }
+
+            match resolver.build_type_context(&statements) {
+                Ok(ctx) => {
+                    type_context = Some(ctx.clone());
+                }
+                Err(e) => {
+                    return Err(format!("Type checking failed:\n{}", e));
+                }
+            }
+        }
+
+        self.generate_code(&statements, type_context)
     }
 
-    fn generate_code(&self, statements: &[Stmt]) -> Result<Bytecode, String> {
+    fn generate_code(&self, statements: &[Stmt], type_context: Option<TypeContext>) -> Result<Bytecode, String> {
         let mut bytecode = Vec::new();
         let mut strings: Vec<String> = Vec::new();
         let mut classes: Vec<ClassDef> = Vec::new();
@@ -49,9 +101,23 @@ impl Compiler {
 
     fn compile_stmt(&self, stmt: &Stmt, bytecode: &mut Vec<u8>, strings: &mut Vec<String>, classes: &[ClassDef]) -> Result<(), String> {
         match stmt {
+            Stmt::Module { .. } => {
+                // Module declaration is currently a no-op for bytecode generation
+                // It can be used for module resolution and namespacing in the future
+            }
             Stmt::Import { .. } => {
+                // Import handled during type checking
             }
             Stmt::Class(_) => {
+                // Class definitions are handled during type checking
+            }
+            Stmt::Enum(_) => {
+                // Enum definitions are handled during type checking
+                // Enum variants are accessed at runtime via their integer values
+            }
+            Stmt::Function(_) => {
+                // Function definitions are handled during type checking
+                // Runtime function calls are handled via the Call opcode
             }
             Stmt::Let { name, expr } => {
                 self.compile_expr(expr, bytecode, strings, classes)?;
@@ -84,7 +150,7 @@ impl Compiler {
 
                 let mut else_jump = Vec::new();
                 if else_branch.is_some() {
-                    bytecode.push(Opcode::JumpIfTrue as u8);
+                    bytecode.push(Opcode::JumpIfFalse as u8);
                     else_jump.push(bytecode.len());
                     bytecode.push(0);
                 } else {
@@ -165,6 +231,10 @@ impl Compiler {
                     }
                     BinaryOp::And => bytecode.push(Opcode::And as u8),
                     BinaryOp::Or => bytecode.push(Opcode::Or as u8),
+                    BinaryOp::Add => bytecode.push(Opcode::Add as u8),
+                    BinaryOp::Subtract => bytecode.push(Opcode::Subtract as u8),
+                    BinaryOp::Multiply => bytecode.push(Opcode::Multiply as u8),
+                    BinaryOp::Divide => bytecode.push(Opcode::Divide as u8),
                 }
             }
             Expr::Unary { op, expr } => {
@@ -182,7 +252,12 @@ impl Compiler {
                     if func_name.starts_with("C.") {
                         let native_name = func_name.strip_prefix("C.").unwrap();
                         let native_id = get_native_id(native_name);
-                        bytecode.push(Opcode::CallNative as u8);
+                        // Check if it's an async native function
+                        if native_name == "http_get" || native_name == "http_post" {
+                            bytecode.push(Opcode::CallNativeAsync as u8);
+                        } else {
+                            bytecode.push(Opcode::CallNative as u8);
+                        }
                         bytecode.push(native_id);
                     } else if func_name == "println" || func_name == "print" {
                         let native_id = get_native_id(func_name);
@@ -241,6 +316,10 @@ impl Compiler {
                 bytecode.push(Opcode::Concat as u8);
                 bytecode.push(parts.len() as u8);
             }
+            Expr::Await { expr } => {
+                self.compile_expr(expr, bytecode, strings, classes)?;
+                bytecode.push(Opcode::Await as u8);
+            }
         }
         Ok(())
     }
@@ -250,6 +329,13 @@ fn get_native_id(name: &str) -> u8 {
     match name {
         "bengal_print" | "print" => 0,
         "bengal_println" | "println" => 1,
+        "http_get" => 2,
+        "http_post" => 3,
+        "http_client_request" => 4,
+        "http_client_get" => 5,
+        "http_client_post" => 6,
+        "http_client_get_with_headers" => 7,
+        "http_client_post_with_headers" => 8,
         _ => 255,
     }
 }
@@ -276,6 +362,11 @@ pub enum Opcode {
     CallNative = 0x41,
     Invoke = 0x42,
     Return = 0x43,
+    CallAsync = 0x44,
+    CallNativeAsync = 0x45,
+    InvokeAsync = 0x46,
+    Await = 0x47,
+    Spawn = 0x48,
 
     Jump = 0x50,
     JumpIfTrue = 0x51,
@@ -287,6 +378,11 @@ pub enum Opcode {
     Or = 0x63,
     Not = 0x64,
     Concat = 0x65,
+
+    Add = 0x66,
+    Subtract = 0x67,
+    Multiply = 0x68,
+    Divide = 0x69,
 
     Pop = 0x70,
 
