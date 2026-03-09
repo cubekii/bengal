@@ -117,19 +117,31 @@ body {
 
 /* Container with sidebar (guide/reference pages) */
 .container.with-sidebar {
-    margin-left: 260px;
-    max-width: calc(1200px - 260px);
+    margin-left: 280px;
+    max-width: calc(1200px - 280px);
+}
+
+/* Center content in container */
+.container > .hero,
+.container > .features,
+.container > .quick-start,
+.container > .getting-started {
+    margin-left: auto;
+    margin-right: auto;
 }
 
 /* Hero Section */
 .hero {
     text-align: center;
-    padding: 4rem 0;
+    padding: 4rem 2rem;
     background: linear-gradient(135deg, #2d1f2e, #1a2e2d);
     color: var(--text-color);
     border-radius: var(--radius-lg);
     margin-bottom: 3rem;
     border: 1px solid var(--border-color);
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .hero h1 {
@@ -185,6 +197,9 @@ body {
 /* Features */
 .features {
     margin-bottom: 3rem;
+    max-width: 1000px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .features h2 {
@@ -197,6 +212,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
     gap: 1.5rem;
+    max-width: 1000px;
+    margin: 0 auto;
 }
 
 .feature-card {
@@ -293,6 +310,10 @@ body {
     box-shadow: var(--shadow);
     margin-top: 2rem;
     border: 1px solid var(--border-color);
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
+    margin-top: 3rem;
 }
 
 .getting-started h2 {
@@ -363,7 +384,7 @@ body {
 /* Guide Page */
 .guide-nav {
     position: fixed;
-    top: 80px;
+    top: 50%;
     left: 20px;
     width: 220px;
     background: var(--card-bg);
@@ -374,6 +395,7 @@ body {
     max-height: calc(100vh - 120px);
     overflow-y: auto;
     z-index: 100;
+    transform: translateY(-50%);
 }
 
 .guide-nav h4 {
@@ -413,6 +435,9 @@ body {
     box-shadow: var(--shadow);
     margin-bottom: 2rem;
     border: 1px solid var(--border-color);
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .guide-section h2 {
@@ -472,6 +497,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     gap: 1.5rem;
+    max-width: 1200px;
+    margin: 0 auto;
 }
 
 .example-card {
@@ -514,6 +541,10 @@ body {
     box-shadow: var(--shadow);
     margin-bottom: 2rem;
     overflow: hidden;
+    border: 1px solid var(--border-color);
+    max-width: 900px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .std-module-header {
@@ -609,6 +640,7 @@ body {
         width: 100%;
         max-height: none;
         margin-bottom: 1rem;
+        transform: none;
     }
 }
 
@@ -620,6 +652,9 @@ body {
     box-shadow: var(--shadow);
     margin-bottom: 2rem;
     border: 1px solid var(--border-color);
+    max-width: 800px;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .quick-start h2 {
