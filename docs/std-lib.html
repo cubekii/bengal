@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standard Library - Bengal Language Documentation</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="logo">🐯</span>
+            <span class="brand-text">Bengal</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="index.html">Home</a></li>
+            <li><a href="guide.html">Guide</a></li>
+            <li><a href="reference.html">Reference</a></li>
+            <li><a href="examples.html">Examples</a></li>
+            <li><a href="std-lib.html" class="active">Standard Library</a></li>
+        </ul>
+        <button class="nav-toggle" aria-label="Toggle navigation">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+    </nav>
+
+    <main class="container">
+        <section class="hero">
+            <h1>Standard Library</h1>
+            <p class="tagline">Built-in modules for common tasks</p>
+        </section>
+
+        <div class="toc">
+            <h4>Modules</h4>
+            <ul>
+                <li><a href="#std-io">std::io</a> - Input/Output operations</li>
+                <li><a href="#std-http">std::http</a> - HTTP client</li>
+                <li><a href="#std-json">std::json</a> - JSON parsing and serialization</li>
+                <li><a href="#std-reflect">std::reflect</a> - Runtime reflection</li>
+                <li><a href="#std-sys">std::sys</a> - System operations</li>
+            </ul>
+        </div>
+
+        <!-- std::io -->
+        <section id="std-io" class="std-module">
+            <div class="std-module-header">
+                <h3>std::io</h3>
+            </div>
+            <div class="std-module-body">
+                <p>Input/Output operations for console output and file handling.</p>
+
+                <div class="std-function">
+                    <h4>println(message: str)</h4>
+                    <p>Print a message followed by a newline.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="io1">Copy</button>
+                        </div>
+                        <pre><code id="io1" class="language-bengal">import std::io
+
+println("Hello, World!")
+// Output: Hello, World!
+//         (with newline)</code></pre>
+                    </div>
+                </div>
+
+                <div class="std-function">
+                    <h4>print(message: str)</h4>
+                    <p>Print a message without adding a newline.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="io2">Copy</button>
+                        </div>
+                        <pre><code id="io2" class="language-bengal">import std::io
+
+print("Loading...")
+print("done!")
+// Output: Loading...done!</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- std::http -->
+        <section id="std-http" class="std-module">
+            <div class="std-module-header">
+                <h3>std::http</h3>
+            </div>
+            <div class="std-module-body">
+                <p>HTTP client for making web requests with async support.</p>
+
+                <div class="std-function">
+                    <h4>HttpClient</h4>
+                    <p>A class for making HTTP requests with configurable options.</p>
+                    
+                    <h4>HttpClient.new(): HttpClient</h4>
+                    <p>Create a new HTTP client instance.</p>
+
+                    <h4>client.set_timeout(int ms)</h4>
+                    <p>Set the request timeout in milliseconds.</p>
+
+                    <h4>client.set_verify_ssl(bool verify)</h4>
+                    <p>Enable or disable SSL certificate verification.</p>
+
+                    <h4>client.add_header(str name, str value)</h4>
+                    <p>Add a header to all requests.</p>
+
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="http1">Copy</button>
+                        </div>
+                        <pre><code id="http1" class="language-bengal">import std::http
+
+// Create HTTP client
+let client = HttpClient.new()
+client.set_timeout(5000)
+client.set_verify_ssl(true)
+
+// Add default headers
+client.add_header("User-Agent", "Bengal/1.0")
+client.add_header("Accept", "application/json")</code></pre>
+                    </div>
+                </div>
+
+                <div class="std-function">
+                    <h4>HttpMethod (enum)</h4>
+                    <p>HTTP method enumeration.</p>
+                    <table class="syntax-table">
+                        <thead>
+                            <tr>
+                                <th>Value</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>HttpMethod.GET</code></td>
+                                <td>HTTP GET request</td>
+                            </tr>
+                            <tr>
+                                <td><code>HttpMethod.POST</code></td>
+                                <td>HTTP POST request</td>
+                            </tr>
+                            <tr>
+                                <td><code>HttpMethod.PUT</code></td>
+                                <td>HTTP PUT request</td>
+                            </tr>
+                            <tr>
+                                <td><code>HttpMethod.DELETE</code></td>
+                                <td>HTTP DELETE request</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="std-function">
+                    <h4>RedirectPolicy (enum)</h4>
+                    <p>Redirect handling policy enumeration.</p>
+                    <table class="syntax-table">
+                        <thead>
+                            <tr>
+                                <th>Value</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>RedirectPolicy.Follow</code></td>
+                                <td>Automatically follow redirects</td>
+                            </tr>
+                            <tr>
+                                <td><code>RedirectPolicy.None</code></td>
+                                <td>Do not follow redirects</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="std-function">
+                    <h4>async fn get(str url): str</h4>
+                    <p>Make an asynchronous HTTP GET request and return the response body.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="http2">Copy</button>
+                        </div>
+                        <pre><code id="http2" class="language-bengal">import std::http
+
+async fn fetch_example(): str {
+  let response = await http.get("https://api.example.com/data")
+  return response
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- std::json -->
+        <section id="std-json" class="std-module">
+            <div class="std-module-header">
+                <h3>std::json</h3>
+            </div>
+            <div class="std-module-body">
+                <p>JSON parsing and serialization utilities.</p>
+
+                <div class="std-function">
+                    <h4>stringify(any value): str</h4>
+                    <p>Convert a value (object, array, or primitive) to a JSON string.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="json1">Copy</button>
+                        </div>
+                        <pre><code id="json1" class="language-bengal">import std::json
+
+class User {
+  name: str = "Alice"
+  age: int = 30
+}
+
+let u = User()
+let jsonStr = std::json::stringify(u)
+println("JSON: ${jsonStr}")
+// Output: {"name":"Alice","age":30}</code></pre>
+                    </div>
+                </div>
+
+                <div class="std-function">
+                    <h4>parse(str json): any</h4>
+                    <p>Parse a JSON string and return the corresponding value.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="json2">Copy</button>
+                        </div>
+                        <pre><code id="json2" class="language-bengal">import std::json
+
+let jsonStr = '{"name":"Bob","age":25}'
+let parsed = std::json::parse(jsonStr)
+
+println("Name: ${parsed.name}")
+println("Age: ${parsed.age}")</code></pre>
+                    </div>
+                </div>
+
+                <div class="alert alert-tip">
+                    <strong>Tip:</strong> The <code>parse</code> function returns an object that can be accessed using dot notation for properties.
+                </div>
+            </div>
+        </section>
+
+        <!-- std::reflect -->
+        <section id="std-reflect" class="std-module">
+            <div class="std-module-header">
+                <h3>std::reflect</h3>
+            </div>
+            <div class="std-module-body">
+                <p>Runtime reflection and type inspection utilities.</p>
+
+                <div class="std-function">
+                    <h4>type_of(any value): str</h4>
+                    <p>Get the type name of a value as a string.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="ref1">Copy</button>
+                        </div>
+                        <pre><code id="ref1" class="language-bengal">import std::reflect
+
+class User {
+  name: str = "Alice"
+}
+
+let u = User()
+let type = std::reflect::type_of(u)
+println("Type: ${type}")
+// Output: Type: User</code></pre>
+                    </div>
+                </div>
+
+                <div class="std-function">
+                    <h4>class_name(any value): str</h4>
+                    <p>Get the class name of an object as a string.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="ref2">Copy</button>
+                        </div>
+                        <pre><code id="ref2" class="language-bengal">import std::reflect
+
+class User {
+  name: str = "Alice"
+}
+
+let u = User()
+let className = std::reflect::class_name(u)
+println("Class: ${className}")
+// Output: Class: User</code></pre>
+                    </div>
+                </div>
+
+                <div class="std-function">
+                    <h4>fields(any obj): any</h4>
+                    <p>Get all fields of an object as a map-like object.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="ref3">Copy</button>
+                        </div>
+                        <pre><code id="ref3" class="language-bengal">import std::reflect
+
+class User {
+  name: str = "Alice"
+  age: int = 30
+}
+
+let u = User()
+let fields = std::reflect::fields(u)
+
+println("Name: ${fields.name}")
+println("Age: ${fields.age}")</code></pre>
+                    </div>
+                </div>
+
+                <div class="alert alert-info">
+                    <strong>Note:</strong> The <code>fields</code> function returns an object that can be accessed using dot notation to get field values.
+                </div>
+            </div>
+        </section>
+
+        <!-- std::sys -->
+        <section id="std-sys" class="std-module">
+            <div class="std-module-header">
+                <h3>std::sys</h3>
+            </div>
+            <div class="std-module-body">
+                <p>System-level operations and environment access.</p>
+
+                <div class="std-function">
+                    <h4>env(str name): str</h4>
+                    <p>Get the value of an environment variable.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="sys1">Copy</button>
+                        </div>
+                        <pre><code id="sys1" class="language-bengal">import std::sys
+
+// Get PATH environment variable
+println("PATH: " + std::sys::env("PATH"))
+
+// Get HOME environment variable
+let home = std::sys::env("HOME")
+println("Home: ${home}")</code></pre>
+                    </div>
+                </div>
+
+                <div class="alert alert-warning">
+                    <strong>Warning:</strong> Accessing environment variables may expose sensitive information. Use caution when handling values like passwords or API keys.
+                </div>
+            </div>
+        </section>
+
+        <!-- Native Functions -->
+        <section id="native" class="std-module">
+            <div class="std-module-header">
+                <h3>Native Functions</h3>
+            </div>
+            <div class="std-module-body">
+                <p>Bengal supports calling native functions implemented in other languages (typically Rust) through the FFI.</p>
+
+                <div class="std-function">
+                    <h4>native fn functionName(params): ReturnType</h4>
+                    <p>Declare a native function that is implemented outside of Bengal.</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>Example</span>
+                            <button class="copy-btn" data-copy-target="native1">Copy</button>
+                        </div>
+                        <pre><code id="native1" class="language-bengal">// Declare a native function
+native fn exception_test()
+
+// Call the native function
+try {
+    exception_test()
+} catch (e) {
+    println("Caught: " + e)
+}</code></pre>
+                    </div>
+                </div>
+
+                <div class="alert alert-info">
+                    <strong>Note:</strong> Native functions must be registered with the Bengal runtime before they can be called. See the compiler documentation for details on implementing native functions.
+                </div>
+            </div>
+        </section>
+
+        <!-- Summary Table -->
+        <section id="summary" class="guide-section">
+            <h2>Quick Reference</h2>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Module</th>
+                        <th>Functions</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>std::io</code></td>
+                        <td><code>println</code>, <code>print</code></td>
+                        <td>Console output</td>
+                    </tr>
+                    <tr>
+                        <td><code>std::http</code></td>
+                        <td><code>HttpClient</code>, <code>get</code>, <code>post</code></td>
+                        <td>HTTP requests</td>
+                    </tr>
+                    <tr>
+                        <td><code>std::json</code></td>
+                        <td><code>stringify</code>, <code>parse</code></td>
+                        <td>JSON handling</td>
+                    </tr>
+                    <tr>
+                        <td><code>std::reflect</code></td>
+                        <td><code>type_of</code>, <code>class_name</code>, <code>fields</code></td>
+                        <td>Runtime reflection</td>
+                    </tr>
+                    <tr>
+                        <td><code>std::sys</code></td>
+                        <td><code>env</code></td>
+                        <td>System operations</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Bengal Language. MIT License.</p>
+            <div class="footer-links">
+                <a href="https://github.com/cubek/bengal">GitHub</a>
+                <a href="https://github.com/cubek/bengal/issues">Issues</a>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

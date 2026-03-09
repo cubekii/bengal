@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Language Reference - Bengal Language Documentation</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="logo">🐯</span>
+            <span class="brand-text">Bengal</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="index.html">Home</a></li>
+            <li><a href="guide.html">Guide</a></li>
+            <li><a href="reference.html" class="active">Reference</a></li>
+            <li><a href="examples.html">Examples</a></li>
+            <li><a href="std-lib.html">Standard Library</a></li>
+        </ul>
+        <button class="nav-toggle" aria-label="Toggle navigation">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+    </nav>
+
+    <main class="container">
+        <div class="guide-nav">
+            <h4>Reference Contents</h4>
+            <ul>
+                <li><a href="#lexical">Lexical Structure</a></li>
+                <li><a href="#types">Types</a></li>
+                <li><a href="#expressions">Expressions</a></li>
+                <li><a href="#statements">Statements</a></li>
+                <li><a href="#functions">Functions</a></li>
+                <li><a href="#classes">Classes</a></li>
+                <li><a href="#modules">Modules</a></li>
+                <li><a href="#patterns">Patterns</a></li>
+                <li><a href="#grammar">Grammar</a></li>
+            </ul>
+        </div>
+
+        <section id="lexical" class="guide-section">
+            <h2>Lexical Structure</h2>
+            
+            <h3>Identifiers</h3>
+            <p>Identifiers in Bengal start with a letter or underscore, followed by letters, digits, or underscores:</p>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Pattern</th>
+                        <th>Description</th>
+                        <th>Examples</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>[a-zA-Z_][a-zA-Z0-9_]*</code></td>
+                        <td>Valid identifier</td>
+                        <td><code>name</code>, <code>_private</code>, <code>myVar123</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Keywords</h3>
+            <p>The following keywords are reserved in Bengal:</p>
+            <div class="code-example">
+                <pre><code class="language-bengal">async     await     class     const     else
+fn        for       if        import    in
+let       module    native    null      private
+return    str       throw     try       while
+int       float     bool      void      any</code></pre>
+            </div>
+
+            <h3>Literals</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Syntax</th>
+                        <th>Examples</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Integer</td>
+                        <td><code>[0-9]+</code></td>
+                        <td><code>42</code>, <code>0</code>, <code>-10</code></td>
+                    </tr>
+                    <tr>
+                        <td>Float</td>
+                        <td><code>[0-9]+\.[0-9]+</code></td>
+                        <td><code>3.14</code>, <code>2.0</code>, <code>-0.5</code></td>
+                    </tr>
+                    <tr>
+                        <td>String</td>
+                        <td><code>"..."</code> or <code>"""..."""</code></td>
+                        <td><code>"hello"</code>, <code>"""multiline"""</code></td>
+                    </tr>
+                    <tr>
+                        <td>Boolean</td>
+                        <td><code>true</code> or <code>false</code></td>
+                        <td><code>true</code>, <code>false</code></td>
+                    </tr>
+                    <tr>
+                        <td>Null</td>
+                        <td><code>null</code></td>
+                        <td><code>null</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Comments</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Syntax</th>
+                        <th>Example</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Line comment</td>
+                        <td><code>// ...</code></td>
+                        <td><code>// This is a comment</code></td>
+                    </tr>
+                    <tr>
+                        <td>Block comment</td>
+                        <td><code>/* ... */</code></td>
+                        <td><code>/* Multi-line comment */</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="types" class="guide-section">
+            <h2>Types</h2>
+            
+            <h3>Primitive Types</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Description</th>
+                        <th>Range</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>int</code></td>
+                        <td>64-bit</td>
+                        <td>Signed integer (i64)</td>
+                        <td>-2⁶³ to 2⁶³-1</td>
+                    </tr>
+                    <tr>
+                        <td><code>float</code></td>
+                        <td>64-bit</td>
+                        <td>IEEE 754 float (f64)</td>
+                        <td>±5.0×10⁻³²⁴ to ±1.7×10³⁰⁸</td>
+                    </tr>
+                    <tr>
+                        <td><code>str</code></td>
+                        <td>variable</td>
+                        <td>UTF-8 string</td>
+                        <td>limited by memory</td>
+                    </tr>
+                    <tr>
+                        <td><code>bool</code></td>
+                        <td>8-bit</td>
+                        <td>Boolean</td>
+                        <td><code>true</code> or <code>false</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Nullable Types</h3>
+            <p>Any type can be made nullable by appending <code>?</code>:</p>
+            <div class="code-example">
+                <pre><code class="language-bengal">fn findUser(int id): str? {
+    return null  // Can return null
+}
+
+let maybeValue: int? = null</code></pre>
+            </div>
+
+            <h3>Type Inference</h3>
+            <p>Bengal uses type inference when explicit types are not provided:</p>
+            <div class="code-example">
+                <pre><code class="language-bengal">let x = 42       // x: int
+let pi = 3.14    // pi: float
+let s = "hi"     // s: str</code></pre>
+            </div>
+        </section>
+
+        <section id="expressions" class="guide-section">
+            <h2>Expressions</h2>
+            
+            <h3>Arithmetic Operators</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Operator</th>
+                        <th>Description</th>
+                        <th>Example</th>
+                        <th>Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>+</code></td>
+                        <td>Addition / String concat</td>
+                        <td><code>5 + 3</code></td>
+                        <td><code>8</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>-</code></td>
+                        <td>Subtraction</td>
+                        <td><code>10 - 4</code></td>
+                        <td><code>6</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>*</code></td>
+                        <td>Multiplication</td>
+                        <td><code>3 * 4</code></td>
+                        <td><code>12</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>/</code></td>
+                        <td>Division</td>
+                        <td><code>20 / 4</code></td>
+                        <td><code>5</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Comparison Operators</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Operator</th>
+                        <th>Description</th>
+                        <th>Example</th>
+                        <th>Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>==</code></td>
+                        <td>Equal</td>
+                        <td><code>5 == 5</code></td>
+                        <td><code>true</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>!=</code></td>
+                        <td>Not equal</td>
+                        <td><code>5 != 3</code></td>
+                        <td><code>true</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>&gt;</code></td>
+                        <td>Greater than</td>
+                        <td><code>5 &gt; 3</code></td>
+                        <td><code>true</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>&lt;</code></td>
+                        <td>Less than</td>
+                        <td><code>3 &lt; 5</code></td>
+                        <td><code>true</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>&gt;=</code></td>
+                        <td>Greater or equal</td>
+                        <td><code>5 &gt;= 5</code></td>
+                        <td><code>true</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>&lt;=</code></td>
+                        <td>Less or equal</td>
+                        <td><code>3 &lt;= 5</code></td>
+                        <td><code>true</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Logical Operators</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Operator</th>
+                        <th>Description</th>
+                        <th>Example</th>
+                        <th>Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>!</code></td>
+                        <td>Logical NOT</td>
+                        <td><code>!true</code></td>
+                        <td><code>false</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>&amp;&amp;</code></td>
+                        <td>Logical AND</td>
+                        <td><code>true &amp;&amp; false</code></td>
+                        <td><code>false</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>||</code></td>
+                        <td>Logical OR</td>
+                        <td><code>true || false</code></td>
+                        <td><code>true</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>String Interpolation</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">let name = "Bengal"
+let version = 1.0
+
+// ${expression} syntax
+println("Welcome to ${name} v${version}!")</code></pre>
+            </div>
+
+            <h3>Range Expressions</h3>
+            <p>Ranges use the <code>..</code> operator for iteration:</p>
+            <div class="code-example">
+                <pre><code class="language-bengal">// Ascending range: 1, 2, 3, 4
+for (i in 1..5) { }
+
+// Descending range: 10, 9, 8, 7, 6
+for (i in 10..5) { }</code></pre>
+            </div>
+        </section>
+
+        <section id="statements" class="guide-section">
+            <h2>Statements</h2>
+            
+            <h3>Variable Declaration</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Syntax</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>let name = value</code></td>
+                        <td>Mutable variable with type inference</td>
+                    </tr>
+                    <tr>
+                        <td><code>let name: Type = value</code></td>
+                        <td>Mutable variable with explicit type</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>If Statement</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">if (condition) {
+    // executed if condition is true
+} else if (otherCondition) {
+    // executed if otherCondition is true
+} else {
+    // executed if all conditions are false
+}</code></pre>
+            </div>
+
+            <h3>For Loop</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">for (variable in start..end) {
+    // loop body
+}</code></pre>
+            </div>
+
+            <h3>While Loop</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">while (condition) {
+    // loop body
+}</code></pre>
+            </div>
+
+            <h3>Try-Catch</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">try {
+    // code that may throw
+    throw "error message"
+} catch (e) {
+    // error handling
+    println("Error: " + e)
+}</code></pre>
+            </div>
+        </section>
+
+        <section id="functions" class="guide-section">
+            <h2>Functions</h2>
+            
+            <h3>Function Declaration Syntax</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">fn functionName(param1: Type, param2: Type): ReturnType {
+    // function body
+    return value
+}</code></pre>
+            </div>
+
+            <h3>Parameter Type Shorthand</h3>
+            <p>When consecutive parameters have the same type, specify it once:</p>
+            <div class="code-example">
+                <pre><code class="language-bengal">// Both x and y are int
+fn add(int x, y): int {
+    return x + y
+}</code></pre>
+            </div>
+
+            <h3>Return Types</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Syntax</th>
+                        <th>Description</th>
+                        <th>Example</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>: int</code></td>
+                        <td>Returns integer</td>
+                        <td><code>fn getNum(): int</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>: str?</code></td>
+                        <td>Returns nullable string</td>
+                        <td><code>fn find(): str?</code></td>
+                    </tr>
+                    <tr>
+                        <td>(no return type)</td>
+                        <td>Returns void</td>
+                        <td><code>fn print()</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Async Functions</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">async fn fetchData(url: str): str {
+    let response = await http.get(url)
+    return response
+}</code></pre>
+            </div>
+        </section>
+
+        <section id="classes" class="guide-section">
+            <h2>Classes</h2>
+            
+            <h3>Class Declaration</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">class ClassName {
+    // Fields with default values
+    fieldName: Type = defaultValue
+    
+    // Private field
+    private secret: str = "hidden"
+    
+    // Methods
+    fn methodName(): ReturnType {
+        return value
+    }
+}</code></pre>
+            </div>
+
+            <h3>Access Modifiers</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Modifier</th>
+                        <th>Visibility</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>(none)</td>
+                        <td>Public - accessible from anywhere</td>
+                    </tr>
+                    <tr>
+                        <td><code>private</code></td>
+                        <td>Private - accessible only within the class</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Constructor</h3>
+            <p>Classes are instantiated by calling the class name as a function:</p>
+            <div class="code-example">
+                <pre><code class="language-bengal">class Point {
+    x: int = 0
+    y: int = 0
+}
+
+let p = Point()  // Creates instance with default values</code></pre>
+            </div>
+
+            <h3>Methods</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">class Calculator {
+    fn add(int x, y): int {
+        return x + y
+    }
+    
+    fn multiply(int x, y): int {
+        return x * y
+    }
+}
+
+let calc = Calculator()
+let result = calc.add(5, 3)</code></pre>
+            </div>
+        </section>
+
+        <section id="modules" class="guide-section">
+            <h2>Modules</h2>
+            
+            <h3>Module Declaration</h3>
+            <p>Modules are declared using the <code>module</code> keyword with <code>::</code> namespace separator:</p>
+            <div class="code-example">
+                <pre><code class="language-bengal">module std::io
+module myapp::utils
+module myapp::models::user</code></pre>
+            </div>
+
+            <h3>Import Statement</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">// Import entire module
+import std::io
+
+// Import specific items (future feature)
+// import std::io::{println, print}</code></pre>
+            </div>
+
+            <h3>Module Path Resolution</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Path</th>
+                        <th>Description</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>std::io</code></td>
+                        <td>Standard library io module</td>
+                    </tr>
+                    <tr>
+                        <td><code>std::http</code></td>
+                        <td>Standard library http module</td>
+                    </tr>
+                    <tr>
+                        <td><code>std::json</code></td>
+                        <td>Standard library json module</td>
+                    </tr>
+                    <tr>
+                        <td><code>std::reflect</code></td>
+                        <td>Standard library reflection module</td>
+                    </tr>
+                    <tr>
+                        <td><code>std::sys</code></td>
+                        <td>Standard library system module</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="patterns" class="guide-section">
+            <h2>Patterns</h2>
+            
+            <h3>For-In Pattern</h3>
+            <p>The <code>for...in</code> pattern iterates over ranges:</p>
+            <div class="code-example">
+                <pre><code class="language-bengal">for (i in 0..10) {
+    println(i)
+}</code></pre>
+            </div>
+
+            <h3>Range Behavior</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Range</th>
+                        <th>Behavior</th>
+                        <th>Values</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>1..5</code></td>
+                        <td>Ascending (start &lt; end)</td>
+                        <td>1, 2, 3, 4</td>
+                    </tr>
+                    <tr>
+                        <td><code>10..5</code></td>
+                        <td>Descending (start &gt; end)</td>
+                        <td>10, 9, 8, 7, 6</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="grammar" class="guide-section">
+            <h2>Grammar Summary</h2>
+            
+            <h3>Program Structure</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">program     ::= (moduleDecl)? (import)* (topLevel)*
+moduleDecl  ::= "module" IDENTIFIER ("::" IDENTIFIER)*
+import      ::= "import" IDENTIFIER ("::" IDENTIFIER)+
+topLevel    ::= function | class | statement</code></pre>
+            </div>
+
+            <h3>Function Grammar</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">function    ::= ("async")? "fn" IDENTIFIER "(" params? ")" (":" type)? block
+params      ::= param ("," param)*
+param       ::= type? IDENTIFIER
+type        ::= ("int" | "float" | "str" | "bool" | "void") ("?")?</code></pre>
+            </div>
+
+            <h3>Class Grammar</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">class       ::= "class" IDENTIFIER "{" (field | method)* "}"
+field       ::= ("private")? IDENTIFIER ":" type ("=" expression)?
+method      ::= function</code></pre>
+            </div>
+
+            <h3>Expression Grammar</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">expression  ::= literal | identifier | binaryOp | unaryOp | call | access
+literal     ::= INT | FLOAT | STRING | "true" | "false" | "null"
+binaryOp    ::= expression ("+" | "-" | "*" | "/" | "==" | "!=" | ">" | "<") expression
+unaryOp     ::= ("!" | "-") expression
+call        ::= IDENTIFIER "(" arguments? ")"
+access      ::= expression "." IDENTIFIER</code></pre>
+            </div>
+
+            <h3>Statement Grammar</h3>
+            <div class="code-example">
+                <pre><code class="language-bengal">statement   ::= letStmt | ifStmt | forStmt | whileStmt | tryStmt | returnStmt | exprStmt
+letStmt     ::= "let" IDENTIFIER (":" type)? "=" expression
+ifStmt      ::= "if" "(" expression ")" block ("else" ifStmt | "else" block)?
+forStmt     ::= "for" "(" "let" IDENTIFIER "in" expression ".." expression ")" block
+whileStmt   ::= "while" "(" expression ")" block
+tryStmt     ::= "try" block "catch" "(" IDENTIFIER ")" block
+returnStmt  ::= "return" expression?</code></pre>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Bengal Language. MIT License.</p>
+            <div class="footer-links">
+                <a href="https://github.com/cubek/bengal">GitHub</a>
+                <a href="https://github.com/cubek/bengal/issues">Issues</a>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

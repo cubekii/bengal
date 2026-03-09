@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bengal Language Documentation</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="logo">🐯</span>
+            <span class="brand-text">Bengal</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="index.html" class="active">Home</a></li>
+            <li><a href="guide.html">Guide</a></li>
+            <li><a href="reference.html">Reference</a></li>
+            <li><a href="examples.html">Examples</a></li>
+            <li><a href="std-lib.html">Standard Library</a></li>
+        </ul>
+        <button class="nav-toggle" aria-label="Toggle navigation">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+    </nav>
+
+    <main class="container">
+        <section class="hero">
+            <h1>Welcome to Bengal</h1>
+            <p class="tagline">A modern, expressive programming language with powerful features</p>
+            <div class="hero-buttons">
+                <a href="guide.html" class="btn btn-primary">Get Started</a>
+                <a href="https://github.com/cubek/bengal" class="btn btn-secondary">View on GitHub</a>
+            </div>
+        </section>
+
+        <section class="features">
+            <h2>Key Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">📦</div>
+                    <h3>Modules</h3>
+                    <p>Organize your code with a powerful module system using <code>module</code> and <code>import</code></p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🏗️</div>
+                    <h3>Classes & OOP</h3>
+                    <p>Build structured applications with classes, methods, and access modifiers</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Async/Await</h3>
+                    <p>Write asynchronous code that looks synchronous with async/await support</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔄</div>
+                    <h3>Error Handling</h3>
+                    <p>Robust try-catch blocks for reliable error handling</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔍</div>
+                    <h3>Reflection</h3>
+                    <p>Inspect types and objects at runtime with built-in reflection</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📄</div>
+                    <h3>JSON Support</h3>
+                    <p>Native JSON parsing and stringification for easy data handling</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🌐</div>
+                    <h3>HTTP Client</h3>
+                    <p>Built-in HTTP client for making web requests</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔧</div>
+                    <h3>FFI Support</h3>
+                    <p>Foreign Function Interface for C type compatibility</p>
+                </div>
+            </div>
+        </section>
+
+        <section class="quick-start">
+            <h2>Quick Start</h2>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>hello.bl</span>
+                    <button class="copy-btn" data-copy-target="code1">Copy</button>
+                </div>
+                <pre><code id="code1" class="language-rust">import std::io
+
+println("Hello, World!")</code></pre>
+            </div>
+            <p>Run your Bengal code with the Bengal compiler:</p>
+            <pre><code class="language-bash">bengal run hello.bl</code></pre>
+        </section>
+
+        <section class="getting-started">
+            <h2>Getting Started</h2>
+            <div class="steps">
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h3>Install Bengal</h3>
+                        <p>Clone the repository and build the compiler from source.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h3>Write Your First Program</h3>
+                        <p>Create a <code>.bl</code> file and start coding with Bengal's intuitive syntax.</p>
+                    </div>
+                </div>
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h3>Run and Explore</h3>
+                        <p>Use the Bengal compiler to run your code and explore the standard library.</p>
+                    </div>
+                </div>
+            </div>
+            <a href="guide.html" class="btn btn-primary">Read the Full Guide →</a>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Bengal Language. MIT License.</p>
+            <div class="footer-links">
+                <a href="https://github.com/cubek/bengal">GitHub</a>
+                <a href="https://github.com/cubek/bengal/issues">Issues</a>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

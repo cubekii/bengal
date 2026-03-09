@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Examples - Bengal Language Documentation</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="logo">🐯</span>
+            <span class="brand-text">Bengal</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="index.html">Home</a></li>
+            <li><a href="guide.html">Guide</a></li>
+            <li><a href="reference.html">Reference</a></li>
+            <li><a href="examples.html" class="active">Examples</a></li>
+            <li><a href="std-lib.html">Standard Library</a></li>
+        </ul>
+        <button class="nav-toggle" aria-label="Toggle navigation">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+    </nav>
+
+    <main class="container">
+        <section class="hero">
+            <h1>Code Examples</h1>
+            <p class="tagline">Learn Bengal through practical examples</p>
+        </section>
+
+        <div class="examples-grid">
+            <!-- Hello World -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>01 - Hello World</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">The classic first program - printing to console using std::io</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>01_hello_world.bl</span>
+                            <button class="copy-btn" data-copy-target="ex1">Copy</button>
+                        </div>
+                        <pre><code id="ex1" class="language-bengal">import std::io
+
+println("Hello, World!")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Module Test -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>02 - Module & Class</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Creating modules and classes with methods</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>02_module_test.bl</span>
+                            <button class="copy-btn" data-copy-target="ex2">Copy</button>
+                        </div>
+                        <pre><code id="ex2" class="language-bengal">module std::test
+
+import std::io
+
+class Test {
+  value: int = 42
+
+  fn getValue(): int {
+    return value
+  }
+}
+
+let t = Test()
+println("Value: ${t.getValue()}")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- All Features -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>10 - Functions & Math</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Function definitions with parameters and return types</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>10_all_features.bl</span>
+                            <button class="copy-btn" data-copy-target="ex10">Copy</button>
+                        </div>
+                        <pre><code id="ex10" class="language-bengal">fn sum(int x, y): int {
+  return x + y
+}
+
+fn mul(int x, int y): int {
+  return x * y
+}
+
+fn func(): int {
+  return mul(sum(10, 20), 2)
+}
+
+print("Result: ${func()}")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Class Example -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>11 - Class with Private Fields</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Class with private fields and nullable return types</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>11_class.bl</span>
+                            <button class="copy-btn" data-copy-target="ex11">Copy</button>
+                        </div>
+                        <pre><code id="ex11" class="language-bengal">import std::io
+
+class SomeObject {
+  some_int: int = 10
+  some_float: float = 5.0
+  some_string: str = "Default string"
+
+  private some_private: bool = false
+
+  fn someMethod(): str? {
+    if (!some_private) {
+      some_private = true
+      return null
+    }
+    return some_string
+  }
+}
+
+let some_object = SomeObject()
+
+println("Call 1: ${some_object.someMethod()}")
+println("Call 2: ${some_object.someMethod()}")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Async Test -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>20 - Async/Await Basics</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Introduction to async/await keywords</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>20_async_test.bl</span>
+                            <button class="copy-btn" data-copy-target="ex20">Copy</button>
+                        </div>
+                        <pre><code id="ex20" class="language-bengal">// Simple async/await test - testing basic functionality
+// Since user-defined function calls are not yet fully implemented in the VM,
+// this tests the core async/await mechanics
+
+print("Testing async/await...")
+
+// For now, just test that the code compiles and runs
+// Real async function support requires VM function call implementation
+
+let x = 10
+print("Value: ${x}")
+println("Async/await keywords are working!")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Async HTTP -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>21 - Async HTTP</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Async HTTP request handling</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>21_async_http.bl</span>
+                            <button class="copy-btn" data-copy-target="ex21">Copy</button>
+                        </div>
+                        <pre><code id="ex21" class="language-bengal">// HTTP async test example for Bengal
+// This demonstrates real async HTTP requests
+
+module test
+
+import std::http
+
+async fn fetch_example(): str {
+  // This would make a real HTTP GET request
+  // let response = await http.get("https://api.example.com/data")
+  // return response
+  return "HTTP async is implemented!"
+}
+
+print("Async HTTP support is ready!")
+println("Use std::http module for async requests")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HTTP Client -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>22 - HTTP Client</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Full-featured HTTP client with enums and configuration</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>22_http_client.bl</span>
+                            <button class="copy-btn" data-copy-target="ex22">Copy</button>
+                        </div>
+                        <pre><code id="ex22" class="language-bengal">// Full-featured HTTP Client example for Bengal
+// Demonstrates enums and HttpClient
+
+import std::http
+
+// Using HttpMethod enum
+let method = HttpMethod.GET
+
+// Using RedirectPolicy enum
+let policy = RedirectPolicy.Follow
+
+// Print enum values (they are integers)
+println("HTTP Client example loaded!")
+println("HttpMethod.GET value: ${method}")
+println("RedirectPolicy.Follow value: ${policy}")
+
+// Create HTTP client
+let client = HttpClient.new()
+client.set_timeout(5000)
+client.set_verify_ssl(true)
+
+// Add default headers
+client.add_header("User-Agent", "Bengal/1.0")
+client.add_header("Accept", "application/json")
+
+println("HttpClient created and configured!")
+println("Ready to make HTTP requests!")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Type Test -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>23 - Type System</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Integer and float operations with comparisons</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>23_type_test.bl</span>
+                            <button class="copy-btn" data-copy-target="ex23">Copy</button>
+                        </div>
+                        <pre><code id="ex23" class="language-bengal">// Test file for integer and float type support
+// Bengal uses i64 and f64 internally, but VM supports all C types for FFI
+
+// Test basic integer operations (uses i64)
+let x = 42
+let y = 10
+println("x + y = ${x + y}")
+println("x - y = ${x - y}")
+println("x * y = ${x * y}")
+println("x / y = ${x / y}")
+
+// Test basic float operations (uses f64)
+let a = 3.14
+let b = 2.0
+println("a + b = ${a + b}")
+println("a * b = ${a * b}")
+
+// Test mixed int/float operations
+println("x + a = ${x + a}")
+
+// Test integer comparison
+if (x == 42) {
+  println("x equals 42")
+}
+
+// Test float comparison
+if (a > 3.0) {
+  println("a is greater than 3")
+}
+
+// Test greater and less operators
+if (x > y) {
+  println("x is greater than y")
+}
+
+if (y < x) {
+  println("y is less than x")
+}
+
+println("Type support test completed!")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Block Comments -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>24 - Block Comments</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Line and block comment syntax including nested comments</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>24_block_comments.bl</span>
+                            <button class="copy-btn" data-copy-target="ex24">Copy</button>
+                        </div>
+                        <pre><code id="ex24" class="language-bengal">// Test file for block comments
+
+/* This is a block comment */
+
+let x = 10  // line comment
+let y = 20  /* inline block comment */
+
+/*
+ * Multi-line block comment
+ * with multiple lines
+ */
+
+let z = x + y
+
+/* Nested /* block */ comment */
+let w = z * 2
+
+println("x = ${x}")
+println("y = ${y}")
+println("z = ${z}")
+println("w = ${w}")
+
+/* Final block comment */
+println("Block comments work!")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loops -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>25 - Loops</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">For loops with ranges and while loops</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>25_loops.bl</span>
+                            <button class="copy-btn" data-copy-target="ex25">Copy</button>
+                        </div>
+                        <pre><code id="ex25" class="language-bengal">import std::io
+
+for (i in 1..5) {
+    println(i)
+}
+
+for (i in 10..5) {
+    println(i)
+}
+
+while (true) {
+    println("Loop!")
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reflection -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>26 - Reflection & JSON</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Runtime type inspection and JSON serialization</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>26_reflection.bl</span>
+                            <button class="copy-btn" data-copy-target="ex26">Copy</button>
+                        </div>
+                        <pre><code id="ex26" class="language-bengal">// Test JSON and Reflection
+import std::io
+
+class User {
+  name: str = "Alice"
+  age: int = 30
+}
+
+let u = User()
+
+println("Original object:")
+println(u.name)
+
+// Reflection
+let type = std::reflect::type_of(u)
+println("Type: ${type}")
+
+let className = std::reflect::class_name(u)
+println("Class: ${className}")
+
+let fields = std::reflect::fields(u)
+println("Fields map (as object):")
+println("fields.name: ${fields.name}")
+
+// JSON
+let jsonStr = std::json::stringify(u)
+println("JSON: ${jsonStr}")
+
+let parsed = std::json::parse(jsonStr)
+println("Parsed object class: ${std::reflect::class_name(parsed)}")
+println("Parsed name: ${parsed.name}")
+println("Parsed age: ${parsed.age}")
+
+// Test primitives
+let numJson = std::json::stringify(123)
+println("Num JSON: ${numJson}")
+let parsedNum = std::json::parse(numJson)
+println("Parsed Num type: ${std::reflect::type_of(parsedNum)}")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Multiline Strings -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>27 - Multiline Strings</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Triple-quoted strings with automatic indentation stripping</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>27_multiline_strings.bl</span>
+                            <button class="copy-btn" data-copy-target="ex27">Copy</button>
+                        </div>
+                        <pre><code id="ex27" class="language-bengal">let name = "Bengal"
+let version = 1.0
+
+let multi = """
+    Welcome to ${name}!
+    Version: ${version}
+
+    This is a multiline string
+    with indentation that should be stripped.
+"""
+
+println(multi)
+
+let no_strip = """one line"""
+println(no_strip)
+
+let first_line_stripped = """
+  first line was empty
+  so this is the new first line
+"""
+println(first_line_stripped)
+
+let complex = """Result of 1 + 2 is ${1 + 2}
+Multiple: ${name} ${version}
+    """
+println(complex)</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Try Catch -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>28 - Try-Catch</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Basic exception handling with try-catch blocks</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>28_try_catch.bl</span>
+                            <button class="copy-btn" data-copy-target="ex28">Copy</button>
+                        </div>
+                        <pre><code id="ex28" class="language-bengal">try {
+    println("Entering try block")
+    throw "Exception!"
+    println("This should not be reached")
+} catch (e) {
+    println("Caught: " + e)
+}
+
+println("Continuing after try-catch")</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Nested Try Catch -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>29 - Nested Try-Catch</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Nested exception handling with re-throwing</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>29_nested_try_catch.bl</span>
+                            <button class="copy-btn" data-copy-target="ex29">Copy</button>
+                        </div>
+                        <pre><code id="ex29" class="language-bengal">try {
+    println("Outer try")
+    try {
+        println("Inner try")
+        throw "Inner Exception"
+    } catch (e) {
+        println("Caught in inner: " + e)
+        throw "Re-thrown: " + e
+    }
+} catch (e) {
+    println("Caught in outer: " + e)
+}</code></pre>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Env Test -->
+            <div class="example-card">
+                <div class="example-header">
+                    <h3>30 - Environment Variables</h3>
+                </div>
+                <div class="example-body">
+                    <p class="example-description">Reading environment variables and native function calls</p>
+                    <div class="code-example">
+                        <div class="code-header">
+                            <span>30_env_test.bl</span>
+                            <button class="copy-btn" data-copy-target="ex30">Copy</button>
+                        </div>
+                        <pre><code id="ex30" class="language-bengal">import std::sys
+
+println("PATH: " + std::sys::env("PATH"))
+
+native fn exception_test()
+
+// Testing try-catch
+try {
+    println("Entering try block")
+    exception_test()
+    throw "Manual exception"
+} catch (e) {
+    println("Caught: " + e)
+}
+
+println("Continuing after try-catch")</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Bengal Language. MIT License.</p>
+            <div class="footer-links">
+                <a href="https://github.com/cubek/bengal">GitHub</a>
+                <a href="https://github.com/cubek/bengal/issues">Issues</a>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

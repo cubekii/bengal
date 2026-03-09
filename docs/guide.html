@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guide - Bengal Language Documentation</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-brand">
+            <span class="logo">🐯</span>
+            <span class="brand-text">Bengal</span>
+        </div>
+        <ul class="nav-links">
+            <li><a href="index.html">Home</a></li>
+            <li><a href="guide.html" class="active">Guide</a></li>
+            <li><a href="reference.html">Reference</a></li>
+            <li><a href="examples.html">Examples</a></li>
+            <li><a href="std-lib.html">Standard Library</a></li>
+        </ul>
+        <button class="nav-toggle" aria-label="Toggle navigation">
+            <span></span>
+            <span></span>
+            <span></span>
+        </button>
+    </nav>
+
+    <main class="container">
+        <div class="guide-nav">
+            <h4>Guide Contents</h4>
+            <ul>
+                <li><a href="#introduction">Introduction</a></li>
+                <li><a href="#getting-started">Getting Started</a></li>
+                <li><a href="#basic-syntax">Basic Syntax</a></li>
+                <li><a href="#variables">Variables & Types</a></li>
+                <li><a href="#functions">Functions</a></li>
+                <li><a href="#control-flow">Control Flow</a></li>
+                <li><a href="#classes">Classes & OOP</a></li>
+                <li><a href="#modules">Modules</a></li>
+                <li><a href="#async">Async/Await</a></li>
+                <li><a href="#error-handling">Error Handling</a></li>
+                <li><a href="#advanced">Advanced Features</a></li>
+            </ul>
+        </div>
+
+        <section id="introduction" class="guide-section">
+            <h2>Introduction</h2>
+            <p>
+                Bengal is a modern, expressive programming language designed with simplicity and power in mind. 
+                It features a clean syntax, strong typing, and built-in support for modern programming paradigms 
+                including object-oriented programming, async/await, and reflection.
+            </p>
+            
+            <div class="alert alert-tip">
+                <strong>Tip:</strong> Bengal uses the <code>.bl</code> file extension for source files.
+            </div>
+
+            <h3>Why Bengal?</h3>
+            <ul>
+                <li><strong>Clean Syntax:</strong> Easy to read and write, with minimal boilerplate</li>
+                <li><strong>Modern Features:</strong> Async/await, classes, modules, and more</li>
+                <li><strong>Reflection:</strong> Built-in runtime type inspection</li>
+                <li><strong>JSON Support:</strong> Native JSON parsing and serialization</li>
+                <li><strong>HTTP Client:</strong> Built-in HTTP capabilities</li>
+                <li><strong>FFI Support:</strong> Foreign Function Interface for C interoperability</li>
+            </ul>
+        </section>
+
+        <section id="getting-started" class="guide-section">
+            <h2>Getting Started</h2>
+            
+            <h3>Installation</h3>
+            <p>To get started with Bengal, clone the repository and build from source:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>Terminal</span>
+                    <button class="copy-btn" data-copy-target="install-code">Copy</button>
+                </div>
+                <pre><code id="install-code" class="language-bash">git clone https://github.com/cubek/bengal.git
+cd bengal
+cargo build --release</code></pre>
+            </div>
+
+            <h3>Your First Program</h3>
+            <p>Create a file named <code>hello.bl</code>:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>hello.bl</span>
+                    <button class="copy-btn" data-copy-target="hello-code">Copy</button>
+                </div>
+                <pre><code id="hello-code" class="language-bengal">import std::io
+
+println("Hello, World!")</code></pre>
+            </div>
+
+            <p>Run it with the Bengal compiler:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>Terminal</span>
+                    <button class="copy-btn" data-copy-target="run-code">Copy</button>
+                </div>
+                <pre><code id="run-code" class="language-bash">bengal run hello.bl</code></pre>
+            </div>
+        </section>
+
+        <section id="basic-syntax" class="guide-section">
+            <h2>Basic Syntax</h2>
+            
+            <h3>Comments</h3>
+            <p>Bengal supports both line comments and block comments:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>comments.bl</span>
+                    <button class="copy-btn" data-copy-target="comments-code">Copy</button>
+                </div>
+                <pre><code id="comments-code" class="language-bengal">// This is a line comment
+
+/* This is a block comment */
+
+/*
+ * Multi-line block comment
+ * with multiple lines
+ */
+
+let x = 10  // inline comment
+let y = 20  /* inline block comment */</code></pre>
+            </div>
+
+            <h3>String Interpolation</h3>
+            <p>Use <code>${}</code> syntax to embed expressions in strings:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>interpolation.bl</span>
+                    <button class="copy-btn" data-copy-target="interp-code">Copy</button>
+                </div>
+                <pre><code id="interp-code" class="language-bengal">let name = "Bengal"
+let version = 1.0
+
+println("Welcome to ${name} version ${version}!")
+// Output: Welcome to Bengal version 1.0!</code></pre>
+            </div>
+
+            <h3>Multiline Strings</h3>
+            <p>Use triple quotes for multiline strings with automatic indentation stripping:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>multiline.bl</span>
+                    <button class="copy-btn" data-copy-target="multiline-code">Copy</button>
+                </div>
+                <pre><code id="multiline-code" class="language-bengal">let text = """
+    This is a multiline string.
+    Indentation is automatically stripped.
+    Variables work: ${name}
+"""
+
+println(text)</code></pre>
+            </div>
+        </section>
+
+        <section id="variables" class="guide-section">
+            <h2>Variables & Types</h2>
+            
+            <h3>Variable Declaration</h3>
+            <p>Use <code>let</code> to declare mutable variables:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>variables.bl</span>
+                    <button class="copy-btn" data-copy-target="vars-code">Copy</button>
+                </div>
+                <pre><code id="vars-code" class="language-bengal">let x = 42
+let message = "Hello"</code></pre>
+            </div>
+
+            <h3>Basic Types</h3>
+            <table class="syntax-table">
+                <thead>
+                    <tr>
+                        <th>Type</th>
+                        <th>Description</th>
+                        <th>Example</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>int</code></td>
+                        <td>64-bit integer (i64)</td>
+                        <td><code>let x: int = 42</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>float</code></td>
+                        <td>64-bit float (f64)</td>
+                        <td><code>let pi: float = 3.14</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>str</code></td>
+                        <td>String</td>
+                        <td><code>let s: str = "hello"</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>bool</code></td>
+                        <td>Boolean</td>
+                        <td><code>let b: bool = true</code></td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Type Annotations</h3>
+            <p>Types can be explicitly annotated or inferred:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>types.bl</span>
+                    <button class="copy-btn" data-copy-target="types-code">Copy</button>
+                </div>
+                <pre><code id="types-code" class="language-bengal">// Type inference
+let x = 42        // inferred as int
+let pi = 3.14     // inferred as float
+
+// Explicit types
+let y: int = 10
+let a: float = 2.0</code></pre>
+            </div>
+
+            <h3>Operators</h3>
+            <p>Bengal supports standard arithmetic and comparison operators:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>operators.bl</span>
+                    <button class="copy-btn" data-copy-target="ops-code">Copy</button>
+                </div>
+                <pre><code id="ops-code" class="language-bengal">// Arithmetic
+let sum = x + y
+let diff = x - y
+let product = x * y
+let quotient = x / y
+
+// Comparison
+if (x == 42) { }
+if (x != 0) { }
+if (x > y) { }
+if (x < y) { }</code></pre>
+            </div>
+        </section>
+
+        <section id="functions" class="guide-section">
+            <h2>Functions</h2>
+            
+            <h3>Function Declaration</h3>
+            <p>Use <code>fn</code> to declare functions with optional type annotations:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>functions.bl</span>
+                    <button class="copy-btn" data-copy-target="funcs-code">Copy</button>
+                </div>
+                <pre><code id="funcs-code" class="language-bengal">fn sum(int x, y): int {
+  return x + y
+}
+
+fn mul(int x, int y): int {
+  return x * y
+}
+
+// Calling functions
+let result = sum(10, 20)
+println("Sum: ${result}")</code></pre>
+            </div>
+
+            <h3>Function Parameters</h3>
+            <p>Parameters can have types specified once for multiple parameters:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>params.bl</span>
+                    <button class="copy-btn" data-copy-target="params-code">Copy</button>
+                </div>
+                <pre><code id="params-code" class="language-bengal">// Both x and y are int
+fn add(int x, y): int {
+    return x + y
+}</code></pre>
+            </div>
+        </section>
+
+        <section id="control-flow" class="guide-section">
+            <h2>Control Flow</h2>
+            
+            <h3>If/Else</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>if.bl</span>
+                    <button class="copy-btn" data-copy-target="if-code">Copy</button>
+                </div>
+                <pre><code id="if-code" class="language-bengal">if (x > 10) {
+    println("x is greater than 10")
+} else if (x == 10) {
+    println("x equals 10")
+} else {
+    println("x is less than 10")
+}</code></pre>
+            </div>
+
+            <h3>For Loops</h3>
+            <p>Use <code>for...in</code> for range-based loops:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>for.bl</span>
+                    <button class="copy-btn" data-copy-target="for-code">Copy</button>
+                </div>
+                <pre><code id="for-code" class="language-bengal">// Count up: 1, 2, 3, 4
+for (i in 1..5) {
+    println(i)
+}
+
+// Count down: 10, 9, 8, 7, 6
+for (i in 10..5) {
+    println(i)
+}</code></pre>
+            </div>
+
+            <h3>While Loops</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>while.bl</span>
+                    <button class="copy-btn" data-copy-target="while-code">Copy</button>
+                </div>
+                <pre><code id="while-code" class="language-bengal">while (condition) {
+    println("Loop!")
+    // update condition
+}</code></pre>
+            </div>
+        </section>
+
+        <section id="classes" class="guide-section">
+            <h2>Classes & OOP</h2>
+            
+            <p>Bengal supports object-oriented programming with classes, methods, and access modifiers.</p>
+
+            <h3>Class Definition</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>class.bl</span>
+                    <button class="copy-btn" data-copy-target="class-code">Copy</button>
+                </div>
+                <pre><code id="class-code" class="language-bengal">class SomeObject {
+  some_int: int = 10
+  some_float: float = 5.0
+  some_string: str = "Default string"
+
+  private some_private: bool = false
+
+  fn someMethod(): str? {
+    if (!some_private) {
+      some_private = true
+      return null
+    }
+    return some_string
+  }
+}
+
+// Creating instances
+let some_object = SomeObject()
+println("Call 1: ${some_object.someMethod()}")
+println("Call 2: ${some_object.someMethod()}")</code></pre>
+            </div>
+
+            <h3>Access Modifiers</h3>
+            <ul>
+                <li><strong>public</strong> (default): Accessible from anywhere</li>
+                <li><strong>private</strong>: Accessible only within the class</li>
+            </ul>
+
+            <h3>Nullable Types</h3>
+            <p>Use <code>?</code> to indicate a type can be null:</p>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>nullable.bl</span>
+                    <button class="copy-btn" data-copy-target="null-code">Copy</button>
+                </div>
+                <pre><code id="null-code" class="language-bengal">fn findUser(int id): str? {
+    // May return null
+    return null
+}</code></pre>
+            </div>
+        </section>
+
+        <section id="modules" class="guide-section">
+            <h2>Modules</h2>
+            
+            <p>Bengal has a powerful module system for organizing code.</p>
+
+            <h3>Defining Modules</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>module.bl</span>
+                    <button class="copy-btn" data-copy-target="module-code">Copy</button>
+                </div>
+                <pre><code id="module-code" class="language-bengal">module std::test
+
+import std::io
+
+class Test {
+  value: int = 42
+
+  fn getValue(): int {
+    return value
+  }
+}</code></pre>
+            </div>
+
+            <h3>Importing Modules</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>import.bl</span>
+                    <button class="copy-btn" data-copy-target="import-code">Copy</button>
+                </div>
+                <pre><code id="import-code" class="language-bengal">import std::io
+import std::http
+import std::json</code></pre>
+            </div>
+        </section>
+
+        <section id="async" class="guide-section">
+            <h2>Async/Await</h2>
+            
+            <p>Bengal supports asynchronous programming with <code>async</code> and <code>await</code> keywords.</p>
+
+            <div class="code-example">
+                <div class="code-header">
+                    <span>async.bl</span>
+                    <button class="copy-btn" data-copy-target="async-code">Copy</button>
+                </div>
+                <pre><code id="async-code" class="language-bengal">async fn fetch_example(): str {
+  // Make async HTTP request
+  // let response = await http.get("https://api.example.com/data")
+  return "HTTP async is implemented!"
+}
+
+// Using async functions
+// let result = await fetch_example()</code></pre>
+            </div>
+
+            <div class="alert alert-info">
+                <strong>Note:</strong> Async functions can only be called with <code>await</code> from within other async functions.
+            </div>
+        </section>
+
+        <section id="error-handling" class="guide-section">
+            <h2>Error Handling</h2>
+            
+            <p>Bengal uses try-catch blocks for error handling.</p>
+
+            <h3>Try-Catch</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>try-catch.bl</span>
+                    <button class="copy-btn" data-copy-target="try-code">Copy</button>
+                </div>
+                <pre><code id="try-code" class="language-bengal">try {
+    println("Entering try block")
+    throw "Exception!"
+    println("This should not be reached")
+} catch (e) {
+    println("Caught: " + e)
+}
+
+println("Continuing after try-catch")</code></pre>
+            </div>
+
+            <h3>Nested Try-Catch</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>nested-try.bl</span>
+                    <button class="copy-btn" data-copy-target="nested-code">Copy</button>
+                </div>
+                <pre><code id="nested-code" class="language-bengal">try {
+    println("Outer try")
+    try {
+        println("Inner try")
+        throw "Inner Exception"
+    } catch (e) {
+        println("Caught in inner: " + e)
+        throw "Re-thrown: " + e
+    }
+} catch (e) {
+    println("Caught in outer: " + e)
+}</code></pre>
+            </div>
+        </section>
+
+        <section id="advanced" class="guide-section">
+            <h2>Advanced Features</h2>
+            
+            <h3>Reflection</h3>
+            <p>Bengal has built-in reflection capabilities:</p>
+            
+            <div class="code-example">
+                <div class="code-header">
+                    <span>reflection.bl</span>
+                    <button class="copy-btn" data-copy-target="reflect-code">Copy</button>
+                </div>
+                <pre><code id="reflect-code" class="language-bengal">import std::io
+
+class User {
+  name: str = "Alice"
+  age: int = 30
+}
+
+let u = User()
+
+// Get type information
+let type = std::reflect::type_of(u)
+let className = std::reflect::class_name(u)
+
+// Get fields as object
+let fields = std::reflect::fields(u)
+println("fields.name: ${fields.name}")</code></pre>
+            </div>
+
+            <h3>JSON Support</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>json.bl</span>
+                    <button class="copy-btn" data-copy-target="json-code">Copy</button>
+                </div>
+                <pre><code id="json-code" class="language-bengal">import std::json
+
+// Stringify object to JSON
+let jsonStr = std::json::stringify(u)
+println("JSON: ${jsonStr}")
+
+// Parse JSON string
+let parsed = std::json::parse(jsonStr)
+println("Parsed name: ${parsed.name}")</code></pre>
+            </div>
+
+            <h3>HTTP Client</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>http.bl</span>
+                    <button class="copy-btn" data-copy-target="http-code">Copy</button>
+                </div>
+                <pre><code id="http-code" class="language-bengal">import std::http
+
+// Using HttpMethod enum
+let method = HttpMethod.GET
+
+// Using RedirectPolicy enum
+let policy = RedirectPolicy.Follow
+
+// Create HTTP client
+let client = HttpClient.new()
+client.set_timeout(5000)
+client.set_verify_ssl(true)
+
+// Add headers
+client.add_header("User-Agent", "Bengal/1.0")
+client.add_header("Accept", "application/json")</code></pre>
+            </div>
+
+            <h3>Environment Variables</h3>
+            <div class="code-example">
+                <div class="code-header">
+                    <span>env.bl</span>
+                    <button class="copy-btn" data-copy-target="env-code">Copy</button>
+                </div>
+                <pre><code id="env-code" class="language-bengal">import std::sys
+
+// Get environment variable
+println("PATH: " + std::sys::env("PATH"))</code></pre>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Bengal Language. MIT License.</p>
+            <div class="footer-links">
+                <a href="https://github.com/cubek/bengal">GitHub</a>
+                <a href="https://github.com/cubek/bengal/issues">Issues</a>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>
