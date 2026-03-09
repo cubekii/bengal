@@ -145,6 +145,9 @@ pub struct TypeContext {
 pub struct TypeError {
     pub message: String,
     pub line: usize,
+    pub column: usize,
+    pub source_file: Option<String>,
+    pub source_line: Option<String>,
 }
 
 impl TypeContext {
@@ -377,12 +380,47 @@ impl TypeContext {
         self.functions.get(name)
     }
 
+    /// Try to resolve a function name, including searching for unqualified names
+    /// in qualified functions (e.g., "foo" matches "std::sys::foo")
+    pub fn resolve_function(&self, name: &str) -> Option<&FunctionSignature> {
+        // First try exact match
+        if let Some(sig) = self.functions.get(name) {
+            return Some(sig);
+        }
+
+        // Try to find a function that ends with ::<name>
+        // Prefer exact module match if we're in a module context
+        for (func_name, sig) in &self.functions {
+            if func_name.ends_with(&format!("::{}", name)) {
+                return Some(sig);
+            }
+        }
+
+        None
+    }
+
     pub fn get_method(&self, class_name: &str, method_name: &str) -> Option<&MethodSignature> {
         self.classes.get(class_name).and_then(|c| c.methods.get(method_name))
     }
 
     pub fn add_error(&mut self, message: String, line: usize) {
-        self.errors.push(TypeError { message, line });
+        self.errors.push(TypeError {
+            message,
+            line,
+            column: 0,
+            source_file: None,
+            source_line: None,
+        });
+    }
+
+    pub fn add_error_with_location(&mut self, message: String, line: usize, column: usize, source_file: Option<String>, source_line: Option<String>) {
+        self.errors.push(TypeError {
+            message,
+            line,
+            column,
+            source_file,
+            source_line,
+        });
     }
 
     pub fn has_errors(&self) -> bool {
@@ -410,8 +448,14 @@ impl TypeChecker {
     }
 
     pub fn check(&mut self, statements: &[Stmt]) -> Result<&TypeContext, Vec<TypeError>> {
+        self.check_with_options(statements, false)
+    }
+
+    /// Type check statements, optionally skipping function registration
+    /// (for imported modules where functions are already registered with qualified names)
+    pub fn check_with_options(&mut self, statements: &[Stmt], skip_functions: bool) -> Result<&TypeContext, Vec<TypeError>> {
         // First pass: collect all class and function definitions
-        self.collect_definitions(statements);
+        self.collect_definitions(statements, skip_functions);
 
         // Second pass: type check all statements
         for stmt in statements {
@@ -433,7 +477,7 @@ impl TypeChecker {
         &mut self.context
     }
 
-    fn collect_definitions(&mut self, statements: &[Stmt]) {
+    fn collect_definitions(&mut self, statements: &[Stmt], skip_functions: bool) {
         for stmt in statements {
             match stmt {
                 Stmt::Class(class) => {
@@ -443,20 +487,22 @@ impl TypeChecker {
                     self.context.add_enum(enum_def);
                 }
                 Stmt::Function(func) => {
-                    let params: Vec<ParamSignature> = func.params.iter().map(|p| ParamSignature {
-                        name: p.name.clone(),
-                        type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
-                    }).collect();
+                    if !skip_functions {
+                        let params: Vec<ParamSignature> = func.params.iter().map(|p| ParamSignature {
+                            name: p.name.clone(),
+                            type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
+                        }).collect();
 
-                    self.context.add_function(&func.name, FunctionSignature {
-                        name: func.name.clone(),
-                        params,
-                        return_type: func.return_type.as_ref().map(|t| Type::from_str(t)),
-                        return_optional: func.return_optional,
-                        is_method: false,
-                        is_async: func.is_async,
-                        is_native: func.is_native,
-                    });
+                        self.context.add_function(&func.name, FunctionSignature {
+                            name: func.name.clone(),
+                            params,
+                            return_type: func.return_type.as_ref().map(|t| Type::from_str(t)),
+                            return_optional: func.return_optional,
+                            is_method: false,
+                            is_async: func.is_async,
+                            is_native: func.is_native,
+                        });
+                    }
                 }
                 Stmt::Import { path: _ } => {
                     // Import handled during module resolution
@@ -487,9 +533,9 @@ impl TypeChecker {
                 let expr_type = self.infer_expr(expr);
                 self.context.add_variable(name, expr_type);
             }
-            Stmt::Assign { name, expr } => {
+            Stmt::Assign { name, expr, span } => {
                 let expr_type = self.infer_expr(expr);
-                
+
                 if let Some(var_info) = self.context.get_variable(name) {
                     if !expr_type.is_assignable_to(&var_info.type_name) {
                         self.context.add_error(
@@ -502,8 +548,34 @@ impl TypeChecker {
                             0
                         );
                     }
+                } else if let Some(current_class) = &self.context.current_class {
+                    // Check if assigning to a class field without self
+                    if let Some(class_info) = self.context.get_class(current_class) {
+                        if class_info.fields.contains_key(name) {
+                            // Error: assigning to class member without self
+                            self.context.add_error_with_location(
+                                format!(
+                                    "Cannot assign to class member '{}' without 'self' keyword. Use 'self.{}' instead.",
+                                    name, name
+                                ),
+                                span.line,
+                                span.column,
+                                None,
+                                None,
+                            );
+                            return;
+                        }
+                    }
+                    // Inside a class method, implicit variable declarations are not allowed
+                    self.context.add_error_with_location(
+                        format!("Undeclared variable '{}'. Use 'let {} = ...' to declare a local variable", name, name),
+                        span.line,
+                        span.column,
+                        None,
+                        None,
+                    );
                 } else {
-                    // Variable not declared with let, create it
+                    // Variable not declared with let, create it (implicit declaration in global/function scope)
                     self.context.add_variable(name, expr_type);
                 }
             }
@@ -722,24 +794,52 @@ impl TypeChecker {
                     Literal::Null => Type::Null,
                 }
             }
-            Expr::Variable(name) => {
+            Expr::Variable { name, span } => {
                 if let Some(var_info) = self.context.get_variable(name) {
                     var_info.type_name.clone()
                 } else if let Some(current_class) = &self.context.current_class {
                     if let Some(class_info) = self.context.get_class(current_class) {
-                        if let Some(field_type) = class_info.fields.get(name) {
-                            return field_type.type_name.clone();
+                        if let Some(field_info) = class_info.fields.get(name) {
+                            // Error: accessing class member without self
+                            let field_type = field_info.type_name.clone();
+                            self.context.add_error_with_location(
+                                format!(
+                                    "Cannot access class member '{}' without 'self' keyword. Use 'self.{}' instead.",
+                                    name, name
+                                ),
+                                span.line,
+                                span.column,
+                                None,
+                                None,
+                            );
+                            return field_type;
                         }
                     }
+                    // Variable not found in class context - report as undeclared
+                    self.context.add_error_with_location(
+                        format!("Undeclared variable '{}'", name),
+                        span.line,
+                        span.column,
+                        None,
+                        None,
+                    );
                     Type::Unknown
                 } else if self.context.get_enum(name).is_some() {
                     // Enum type access
                     Type::Enum(name.clone())
                 } else {
+                    // Variable not found in global/function context - report as undeclared
+                    self.context.add_error_with_location(
+                        format!("Undeclared variable '{}'", name),
+                        span.line,
+                        span.column,
+                        None,
+                        None,
+                    );
                     Type::Unknown
                 }
             }
-            Expr::Binary { left, op, right } => {
+            Expr::Binary { left, op, right, .. } => {
                 let left_type = self.infer_expr(left);
                 let right_type = self.infer_expr(right);
 
@@ -820,7 +920,7 @@ impl TypeChecker {
                     }
                 }
             }
-            Expr::Unary { op, expr } => {
+            Expr::Unary { op, expr, .. } => {
                 let inner_type = self.infer_expr(expr);
                 match op {
                     crate::parser::UnaryOp::Not => {
@@ -834,8 +934,8 @@ impl TypeChecker {
                     }
                 }
             }
-            Expr::Call { callee, args } => {
-                if let Expr::Variable(func_name) = callee.as_ref() {
+            Expr::Call { callee, args, .. } => {
+                if let Expr::Variable { name: func_name, .. } = callee.as_ref() {
                     // Check if it's a function call
                     let func_sig = self.context.get_function(func_name).cloned();
                     if let Some(ref sig) = func_sig {
@@ -853,7 +953,7 @@ impl TypeChecker {
                     } else {
                         Type::Unknown
                     }
-                } else if let Expr::Get { object, name } = callee.as_ref() {
+                } else if let Expr::Get { object, name, .. } = callee.as_ref() {
                     // Method call
                     let object_type = self.infer_expr(object);
 
@@ -903,7 +1003,7 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
-            Expr::Get { object, name } => {
+            Expr::Get { object, name, .. } => {
                 let object_type = self.infer_expr(object);
 
                 if let Type::Class(class_name) = object_type {
@@ -920,13 +1020,13 @@ impl TypeChecker {
                                     visibility_error = Some(format!("Field '{}' on class '{}' is private and cannot be accessed from global scope", name, class_name));
                                 }
                             }
-                            
+
                             let type_name = field_info.type_name.clone();
-                            
+
                             if let Some(err) = visibility_error {
                                 self.context.add_error(err, 0);
                             }
-                            
+
                             type_name
                         } else {
                             self.context.add_error(
@@ -957,14 +1057,14 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
-            Expr::Set { object, name, value } => {
+            Expr::Set { object, name, value, span } => {
                 let object_type = self.infer_expr(object);
                 let value_type = self.infer_expr(value);
 
                 if let Type::Class(class_name) = object_type {
                     let field_info = self.context.get_class(&class_name)
                         .and_then(|c| c.fields.get(name).cloned());
-                    
+
                     if let Some(ref field) = field_info {
                         // Check visibility
                         let mut visibility_error = None;
@@ -979,25 +1079,31 @@ impl TypeChecker {
                         }
 
                         if let Some(err) = visibility_error {
-                            self.context.add_error(err, 0);
+                            self.context.add_error_with_location(err, span.line, span.column, None, None);
                         }
 
                         if !value_type.is_assignable_to(&field.type_name) {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!(
                                     "Cannot assign {} to field '{}' of type {}",
                                     value_type.to_str(),
                                     name,
                                     field.type_name.to_str()
                                 ),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         field.type_name.clone()
                     } else {
-                        self.context.add_error(
+                        self.context.add_error_with_location(
                             format!("Field '{}' not found on class '{}'", name, class_name),
-                            0
+                            span.line,
+                            span.column,
+                            None,
+                            None,
                         );
                         Type::Unknown
                     }
@@ -1005,7 +1111,7 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
-            Expr::Interpolated { parts } => {
+            Expr::Interpolated { parts, .. } => {
                 for part in parts {
                     if let crate::parser::InterpPart::Expr(e) = part {
                         self.infer_expr(e);
@@ -1013,7 +1119,7 @@ impl TypeChecker {
                 }
                 Type::Str
             }
-            Expr::Range { start, end } => {
+            Expr::Range { start, end, .. } => {
                 let start_type = self.infer_expr(start);
                 let end_type = self.infer_expr(end);
                 if start_type != Type::Int && start_type != Type::Unknown {
@@ -1024,7 +1130,7 @@ impl TypeChecker {
                 }
                 Type::Int
             }
-            Expr::Await { expr } => {
+            Expr::Await { expr, .. } => {
                 let inner_type = self.infer_expr(expr);
                 // Await unwraps Promise<T> to T
                 match inner_type {

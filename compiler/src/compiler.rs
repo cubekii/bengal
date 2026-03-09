@@ -1,8 +1,8 @@
-use crate::parser::{Stmt, Expr, Literal, Parser, ClassDef, BinaryOp, UnaryOp, InterpPart};
+use crate::parser::{Stmt, Expr, Literal, Parser, ClassDef, FunctionDef, BinaryOp, UnaryOp, InterpPart};
 use crate::lexer::Lexer;
 use crate::resolver::ModuleResolver;
 use crate::types::TypeContext;
-use sparkler::vm::{Class, Value, Opcode};
+use sparkler::vm::{Class, Value, Opcode, Function};
 
 pub type Bytecode = sparkler::executor::Bytecode;
 
@@ -49,24 +49,26 @@ impl Compiler {
 
     pub fn compile_with_options(&self, options: &CompilerOptions) -> Result<Bytecode, String> {
         let mut lexer = Lexer::new(&self.source);
-        let tokens = lexer.tokenize()?;
+        let (tokens, token_positions) = lexer.tokenize()?;
 
-        let mut parser = Parser::new(tokens);
+        let mut parser = Parser::new(tokens, &self.source, token_positions);
         let statements = parser.parse()?;
 
+        let mut resolver = None;
         let mut type_context = None;
         if options.enable_type_checking {
-            let mut resolver = ModuleResolver::new();
+            let mut resolver_instance = ModuleResolver::new();
 
             for path in &options.search_paths {
                 if let Ok(full_path) = std::path::PathBuf::from(path).canonicalize() {
-                    resolver.add_search_path(full_path);
+                    resolver_instance.add_search_path(full_path);
                 }
             }
 
-            match resolver.build_type_context(&statements) {
+            match resolver_instance.build_type_context_with_source(&statements, &self.source, self._source_path.as_deref()) {
                 Ok(ctx) => {
                     type_context = Some(ctx.clone());
+                    resolver = Some(resolver_instance);
                 }
                 Err(e) => {
                     return Err(format!("Type checking failed:\n{}", e));
@@ -74,17 +76,47 @@ impl Compiler {
             }
         }
 
-        self.generate_code(&statements, type_context)
+        self.generate_code(&statements, type_context, resolver)
     }
 
-    fn generate_code(&self, statements: &[Stmt], type_context: Option<TypeContext>) -> Result<Bytecode, String> {
+    fn generate_code(&self, statements: &[Stmt], type_context: Option<TypeContext>, resolver: Option<ModuleResolver>) -> Result<Bytecode, String> {
         let mut bytecode = Vec::new();
         let mut strings: Vec<String> = Vec::new();
         let mut classes: Vec<ClassDef> = Vec::new();
+        let mut functions: Vec<FunctionDef> = Vec::new();
+
+        // Track source files and source content for functions from imported modules
+        let mut function_source_files: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut function_sources: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        // Collect functions from imported modules first (with full qualified names)
+        if let Some(res) = &resolver {
+            for (module_name, module_info) in res.get_loaded_modules() {
+                for stmt in &module_info.statements {
+                    if let Stmt::Function(func) = stmt {
+                        // Create a new function def with the full qualified name
+                        let mut func_with_module = func.clone();
+                        let full_name = format!("{}::{}", module_name, func.name);
+                        func_with_module.name = full_name.clone();
+                        functions.push(func_with_module);
+                        // Store the source file path for this function
+                        function_source_files.insert(full_name.clone(), module_info.path.to_string_lossy().to_string());
+                        // Store the source content for line number calculation
+                        function_sources.insert(full_name, module_info.source.clone());
+                    }
+                }
+            }
+        }
 
         for stmt in statements {
-            if let Stmt::Class(class) = stmt {
-                classes.push(class.clone());
+            match stmt {
+                Stmt::Class(class) => {
+                    classes.push(class.clone());
+                }
+                Stmt::Function(func) => {
+                    functions.push(func.clone());
+                }
+                _ => {}
             }
         }
 
@@ -110,17 +142,17 @@ impl Compiler {
             let mut vm_methods = std::collections::HashMap::new();
             for method in &c.methods {
                 let mut method_bytecode = Vec::new();
-                
+
                 // Create a temporary type context for this method if none exists
                 let mut method_ctx = type_context.clone().unwrap_or_else(|| TypeContext::new());
                 method_ctx.current_class = Some(c.name.clone());
                 method_ctx.current_method_params = method.params.iter().map(|p| p.name.clone()).collect();
-                
+
                 for stmt in &method.body {
                     self.compile_stmt(stmt, &mut method_bytecode, &mut strings, &classes, Some(&method_ctx))?;
                 }
                 method_bytecode.push(Opcode::Return as u8);
-                
+
                 vm_methods.insert(method.name.clone(), sparkler::vm::Method {
                     name: method.name.clone(),
                     bytecode: method_bytecode,
@@ -134,6 +166,35 @@ impl Compiler {
             });
         }
 
+        // Compile user-defined functions
+        let mut vm_functions = Vec::new();
+        for f in &functions {
+            let mut func_bytecode = Vec::new();
+
+            // Create a temporary type context for this function
+            let mut func_ctx = type_context.clone().unwrap_or_else(|| TypeContext::new());
+            func_ctx.current_method_params = f.params.iter().map(|p| p.name.clone()).collect();
+
+            // Use the correct source for line number calculation
+            let func_source = function_sources.get(&f.name).unwrap_or(&self.source);
+            let func_compiler = Compiler::new(func_source);
+
+            for stmt in &f.body {
+                func_compiler.compile_stmt(stmt, &mut func_bytecode, &mut strings, &classes, Some(&func_ctx))?;
+            }
+            func_bytecode.push(Opcode::Return as u8);
+
+            // Get the source file for this function (if from an imported module)
+            let source_file = function_source_files.get(&f.name).cloned();
+
+            vm_functions.push(Function {
+                name: f.name.clone(),
+                bytecode: func_bytecode,
+                param_count: f.params.len(),
+                source_file,
+            });
+        }
+
         for stmt in statements {
             self.compile_stmt(stmt, &mut bytecode, &mut strings, &classes, type_context.as_ref())?;
         }
@@ -144,10 +205,16 @@ impl Compiler {
             data: bytecode,
             strings,
             classes: vm_classes,
+            functions: vm_functions,
         })
     }
 
     fn compile_stmt(&self, stmt: &Stmt, bytecode: &mut Vec<u8>, strings: &mut Vec<String>, classes: &[ClassDef], type_context: Option<&TypeContext>) -> Result<(), String> {
+        // Emit line number at the start of each statement
+        let line = self.get_statement_line(stmt);
+        bytecode.push(Opcode::Line as u8);
+        bytecode.push(line as u8);
+        
         match stmt {
             Stmt::Module { .. } => {
                 // Module declaration is currently a no-op for bytecode generation
@@ -174,7 +241,7 @@ impl Compiler {
                 bytecode.push(Opcode::StoreLocal as u8);
                 bytecode.push(name_idx as u8);
             }
-            Stmt::Assign { name, expr } => {
+            Stmt::Assign { name, expr, .. } => {
                 let mut handled = false;
                 if let Some(ctx) = type_context {
                     // Check if it's a parameter
@@ -268,7 +335,7 @@ impl Compiler {
             }
             Stmt::For { var_name, range, body } => {
                 // Compile range expression
-                if let Expr::Range { start, end } = range.as_ref() {
+                if let Expr::Range { start, end, .. } = range.as_ref() {
                     // Check if we can determine direction at compile time
                     let is_descending = match (start.as_ref(), end.as_ref()) {
                         (Expr::Literal(Literal::Int(start_val)), Expr::Literal(Literal::Int(end_val))) => {
@@ -450,7 +517,7 @@ impl Compiler {
                     }
                 }
             }
-            Expr::Variable(name) => {
+            Expr::Variable { name, .. } => {
                 if let Some(ctx) = type_context {
                     if let Some(current_class_name) = &ctx.current_class {
                         if let Some(class_info) = ctx.get_class(current_class_name) {
@@ -461,7 +528,7 @@ impl Compiler {
                                 strings.push("0".to_string());
                                 bytecode.push(Opcode::LoadLocal as u8);
                                 bytecode.push(self_name_idx as u8);
-                                
+
                                 // GetProperty
                                 let field_name_idx = strings.len();
                                 strings.push(name.clone());
@@ -471,7 +538,7 @@ impl Compiler {
                             }
                         }
                     }
-                    
+
                     // Handle parameters and 'self' mapping
                     if let Some(pos) = ctx.current_method_params.iter().position(|p| p == name) {
                         let idx = strings.len();
@@ -495,7 +562,7 @@ impl Compiler {
                 bytecode.push(Opcode::LoadLocal as u8);
                 bytecode.push(idx as u8);
             }
-            Expr::Binary { left, op, right } => {
+            Expr::Binary { left, op, right, .. } => {
                 self.compile_expr(left, bytecode, strings, classes, type_context)?;
                 self.compile_expr(right, bytecode, strings, classes, type_context)?;
 
@@ -515,31 +582,34 @@ impl Compiler {
                     BinaryOp::Divide => bytecode.push(Opcode::Divide as u8),
                 }
             }
-            Expr::Unary { op, expr } => {
+            Expr::Unary { op, expr, .. } => {
                 self.compile_expr(expr, bytecode, strings, classes, type_context)?;
                 match op {
                     UnaryOp::Not => bytecode.push(Opcode::Not as u8),
                 }
             }
-            Expr::Call { callee, args } => {
+            Expr::Call { callee, args, .. } => {
                 for arg in args {
                     self.compile_expr(arg, bytecode, strings, classes, type_context)?;
                 }
 
-                if let Expr::Variable(func_name) = callee.as_ref() {
+                if let Expr::Variable { name: func_name, .. } = callee.as_ref() {
                     let mut is_native = false;
                     let mut is_async = false;
-                    
+                    let mut resolved_name = func_name.clone();
+
                     if let Some(ctx) = type_context {
-                        if let Some(sig) = ctx.get_function(func_name) {
+                        // Use resolve_function to find the fully qualified name
+                        if let Some(sig) = ctx.resolve_function(func_name) {
                             is_native = sig.is_native;
                             is_async = sig.is_async;
+                            resolved_name = sig.name.clone();
                         }
                     }
 
                     if is_native {
                         let idx = strings.len();
-                        strings.push(func_name.clone());
+                        strings.push(resolved_name.clone());
                         if is_async {
                             bytecode.push(Opcode::CallNativeAsync as u8);
                         } else {
@@ -547,11 +617,11 @@ impl Compiler {
                         }
                         bytecode.push(idx as u8);
                         bytecode.push(args.len() as u8);
-                    } else if func_name.starts_with("C.") {
-                        let native_name = func_name.strip_prefix("C.").unwrap();
+                    } else if resolved_name.starts_with("C.") {
+                        let native_name = resolved_name.strip_prefix("C.").unwrap();
                         let idx = strings.len();
                         strings.push(native_name.to_string());
-                        
+
                         // Check if it's an async native function
                         if native_name == "http_get" || native_name == "http_post" {
                             bytecode.push(Opcode::CallNativeAsync as u8);
@@ -560,16 +630,16 @@ impl Compiler {
                         }
                         bytecode.push(idx as u8);
                         bytecode.push(args.len() as u8);
-                    } else if func_name == "println" || func_name == "print" {
+                    } else if resolved_name == "println" || resolved_name == "print" {
                         let idx = strings.len();
-                        strings.push(func_name.clone());
+                        strings.push(resolved_name.clone());
                         bytecode.push(Opcode::CallNative as u8);
                         bytecode.push(idx as u8);
                         bytecode.push(args.len() as u8);
                     } else {
                         // Check if it's a known function in type context
                         let is_defined = if let Some(ctx) = type_context {
-                            ctx.get_function(func_name).is_some() || classes.iter().any(|c| c.name == *func_name)
+                            ctx.resolve_function(func_name).is_some() || classes.iter().any(|c| c.name == *func_name)
                         } else {
                             false
                         };
@@ -579,17 +649,17 @@ impl Compiler {
                         }
 
                         let idx = strings.len();
-                        strings.push(func_name.clone());
+                        strings.push(resolved_name.clone());
                         bytecode.push(Opcode::Call as u8);
                         bytecode.push(idx as u8);
                         bytecode.push(args.len() as u8);
                     }
-                } else if let Expr::Get { object, name } = callee.as_ref() {
+                } else if let Expr::Get { object, name, .. } = callee.as_ref() {
                     self.compile_expr(object, bytecode, strings, classes, type_context)?;
 
                     let mut _is_native = false;
                     let mut _is_async = false;
-                    
+
                     if let Some(_ctx) = type_context {
                         // We need a way to infer object type here, but for now we skip this
                         // and assume native methods are handled via InvokeNative
@@ -602,14 +672,14 @@ impl Compiler {
                     bytecode.push((args.len() + 1) as u8);
                 }
             }
-            Expr::Get { object, name } => {
+            Expr::Get { object, name, .. } => {
                 self.compile_expr(object, bytecode, strings, classes, type_context)?;
                 let idx = strings.len();
                 strings.push(name.clone());
                 bytecode.push(Opcode::GetProperty as u8);
                 bytecode.push(idx as u8);
             }
-            Expr::Set { object, name, value } => {
+            Expr::Set { object, name, value, .. } => {
                 self.compile_expr(object, bytecode, strings, classes, type_context)?;
                 self.compile_expr(value, bytecode, strings, classes, type_context)?;
                 let idx = strings.len();
@@ -617,7 +687,7 @@ impl Compiler {
                 bytecode.push(Opcode::SetProperty as u8);
                 bytecode.push(idx as u8);
             }
-            Expr::Interpolated { parts } => {
+            Expr::Interpolated { parts, .. } => {
                 for part in parts {
                     match part {
                         InterpPart::Text(s) => {
@@ -634,17 +704,83 @@ impl Compiler {
                 bytecode.push(Opcode::Concat as u8);
                 bytecode.push(parts.len() as u8);
             }
-            Expr::Range { start: _, end: _ } => {
+            Expr::Range { start: _, end: _, .. } => {
                 // Range expressions are only used in for loops and handled specially
                 // This should not be reached during normal compilation
                 return Err("Range expression outside of for loop".to_string());
             }
-            Expr::Await { expr } => {
+            Expr::Await { expr, .. } => {
                 self.compile_expr(expr, bytecode, strings, classes, type_context)?;
                 bytecode.push(Opcode::Await as u8);
             }
         }
         Ok(())
+    }
+
+    /// Get approximate line number for a statement by counting newlines in source
+    fn get_statement_line(&self, stmt: &Stmt) -> usize {
+        // Simple approach: count newlines up to a rough position
+        // For better accuracy, we'd need to track positions in the parser
+        let source_slice = &self.source;
+        let mut line = 1;
+
+        // Match on statement type to find approximate position
+        match stmt {
+            Stmt::Let { name, .. } => {
+                if let Some(pos) = source_slice.find(&format!("let {}", name)) {
+                    line = source_slice[..pos].matches('\n').count() + 1;
+                }
+            }
+            Stmt::Assign { name, .. } => {
+                if let Some(pos) = source_slice.find(&format!("{} =", name)) {
+                    line = source_slice[..pos].matches('\n').count() + 1;
+                }
+            }
+            Stmt::If { .. } => {
+                if let Some(pos) = source_slice.find("if ") {
+                    line = source_slice[..pos].matches('\n').count() + 1;
+                }
+            }
+            Stmt::Return(_) => {
+                if let Some(pos) = source_slice.find("return ") {
+                    line = source_slice[..pos].matches('\n').count() + 1;
+                }
+            }
+            Stmt::Throw(_) => {
+                if let Some(pos) = source_slice.find("throw ") {
+                    line = source_slice[..pos].matches('\n').count() + 1;
+                }
+            }
+            Stmt::TryCatch { .. } => {
+                if let Some(pos) = source_slice.find("try ") {
+                    line = source_slice[..pos].matches('\n').count() + 1;
+                }
+            }
+            Stmt::Expr(expr) => {
+                // For expression statements, try to find the line by looking for common patterns
+                if let Expr::Call { callee, .. } = expr {
+                    if let Expr::Variable { name, .. } = callee.as_ref() {
+                        // Find all occurrences of the function call pattern
+                        let pattern = format!("{}(", name);
+                        let mut search_start = 0;
+                        while let Some(pos) = source_slice[search_start..].find(&pattern) {
+                            let absolute_pos = search_start + pos;
+                            // Check if this is a call (not a definition)
+                            let before = &source_slice[..absolute_pos];
+                            // Skip if it's a function definition (ends with "fn ")
+                            if !before.trim_end().ends_with("fn") {
+                                line = source_slice[..absolute_pos].matches('\n').count() + 1;
+                                break;
+                            }
+                            search_start = absolute_pos + 1;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        line
     }
 }
 

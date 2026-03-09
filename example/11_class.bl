@@ -12,6 +12,7 @@ class SomeObject {
       some_private = true
       return null
     }
+    self.some_undefined = true
     return some_string
   }
 }

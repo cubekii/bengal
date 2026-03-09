@@ -18,6 +18,7 @@ pub struct ModuleInfo {
     pub statements: Vec<Stmt>,
     pub classes: Vec<String>,
     pub functions: Vec<String>,
+    pub source: String,
 }
 
 impl ModuleResolver {
@@ -70,11 +71,11 @@ impl ModuleResolver {
         // Read and parse the module
         let source = fs::read_to_string(&module_file)
             .map_err(|e| format!("Failed to read module '{}': {}", module_file.display(), e))?;
-        
+
         let mut lexer = Lexer::new(&source);
-        let tokens = lexer.tokenize()?;
-        
-        let mut parser = Parser::new(tokens);
+        let (tokens, token_positions) = lexer.tokenize()?;
+
+        let mut parser = Parser::new(tokens, &source, token_positions);
         let statements = parser.parse()?;
         
         // Create module info
@@ -96,6 +97,7 @@ impl ModuleResolver {
             statements,
             classes,
             functions,
+            source: source.clone(),
         };
         
         self.loaded_modules.insert(module_name, module_info);
@@ -160,6 +162,10 @@ impl ModuleResolver {
     }
 
     pub fn build_type_context(&mut self, main_statements: &[Stmt]) -> Result<TypeContext, String> {
+        self.build_type_context_with_source(main_statements, "", None)
+    }
+
+    pub fn build_type_context_with_source(&mut self, main_statements: &[Stmt], main_source: &str, main_source_path: Option<&str>) -> Result<TypeContext, String> {
         // First, process all imports
         self.process_imports(main_statements)?;
 
@@ -176,19 +182,19 @@ impl ModuleResolver {
         // Register native functions from std::io
         self.register_native_functions();
 
-        // Now type check all loaded modules
+        // Now type check all loaded modules (skip function registration since they're already registered with qualified names)
         for (module_name, statements) in &module_statements {
             let ctx = self.type_context.clone();
             let mut type_checker = TypeChecker::with_context(ctx);
-            let _ = type_checker.check(statements);
-            
+            let _ = type_checker.check_with_options(statements, true);
+
             // Log errors but continue
             if type_checker.get_context().has_errors() {
                 for error in type_checker.get_context().get_errors() {
                     eprintln!("Type error in module '{}': {}", module_name, error.message);
                 }
             }
-            
+
             // Merge the context back (including errors)
             self.type_context = type_checker.get_context().clone();
         }
@@ -196,14 +202,45 @@ impl ModuleResolver {
         // Type check main statements
         let ctx = self.type_context.clone();
         let mut type_checker = TypeChecker::with_context(ctx);
+
         match type_checker.check(main_statements) {
             Ok(ctx) => Ok(ctx.clone()),
             Err(errors) => {
-                let mut error_msg = String::from("Type checking failed:\n");
-                for error in errors {
-                    error_msg.push_str(&format!("  - {}\n", error.message));
+                let mut error_msg = String::new();
+                let source_lines: Vec<&str> = main_source.lines().collect();
+                
+                for mut error in errors {
+                    // Set source file if not already set
+                    if error.source_file.is_none() {
+                        if let Some(path) = main_source_path {
+                            error.source_file = Some(path.to_string());
+                        }
+                    }
+                    
+                    // Extract source line if we have line number
+                    if error.source_line.is_none() && error.line > 0 && error.line <= source_lines.len() {
+                        error.source_line = Some(source_lines[error.line - 1].to_string());
+                    }
+                    
+                    // Format: FILE:LINE:COLUMN: error: message
+                    let location = if let Some(ref file) = error.source_file {
+                        format!("{}:{}:{}", file, error.line, error.column)
+                    } else {
+                        format!("{}:{}", error.line, error.column)
+                    };
+                    
+                    error_msg.push_str(&format!("{}: error: {}\n", location, error.message));
+                    
+                    // Show code snippet if available
+                    if let Some(ref source_line) = error.source_line {
+                        error_msg.push_str(&format!("  {}\n", source_line));
+                        // Show caret pointing to the column
+                        let caret_pos = error.column.saturating_sub(1);
+                        let caret_line: String = " ".repeat(caret_pos) + "^";
+                        error_msg.push_str(&format!("  {}\n", caret_line));
+                    }
                 }
-                Err(error_msg)
+                Err(error_msg.trim().to_string())
             }
         }
     }
