@@ -1,0 +1,27 @@
+import std::data;
+import std::io;
+
+native class MyBuffer {
+    constructor(size: int)
+    fn reserve(size: int)
+    fn set(idx: int, val: uint8)
+    fn get(idx: int): uint8
+    fn length(): int
+
+    fn fill(val: uint8) {
+        for (i in 0..length()-1) {
+            set(i, val)
+        }
+    }
+}
+
+fn main() {
+    let buf = ByteBuffer(10)
+    buf.set(0, uint8(42))
+    println("buf[0]: " + str(buf.get(0)))
+
+    // Since MyBuffer is not registered in VM, this might fail at runtime
+    // but we can test if it compiles.
+}
+
+main()

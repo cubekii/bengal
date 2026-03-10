@@ -1,13 +1,26 @@
 import std::io
 
+println("Test 1")
+
 for (i in 1..5) {
-    println(i)
+    println(str(i))
 }
+
+println("Test 2")
 
 for (i in 10..5) {
-    println(i)
+    println(str(i))
 }
 
+println("Test 3")
+
+// Simple break test
+let count = 3
 while (true) {
-    println("Loop!")
+    if (count-- == 0) {
+        break
+    }
+    println(str(count))
 }
+
+println("Done!")

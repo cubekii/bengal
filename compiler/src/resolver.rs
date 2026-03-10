@@ -59,7 +59,7 @@ impl ModuleResolver {
 
     pub fn resolve_and_load(&mut self, module_path: &[String]) -> Result<(), String> {
         let module_name = module_path.join("::");
-        
+
         // Check if already loaded
         if self.loaded_modules.contains_key(&module_name) {
             return Ok(());
@@ -67,7 +67,7 @@ impl ModuleResolver {
 
         // Find the module file
         let module_file = self.find_module_file(module_path)?;
-        
+
         // Read and parse the module
         let source = fs::read_to_string(&module_file)
             .map_err(|e| format!("Failed to read module '{}': {}", module_file.display(), e))?;
@@ -77,11 +77,11 @@ impl ModuleResolver {
 
         let mut parser = Parser::new(tokens, &source, token_positions);
         let statements = parser.parse()?;
-        
+
         // Create module info
         let mut classes = Vec::new();
         let functions = Vec::new();
-        
+
         for stmt in &statements {
             match stmt {
                 Stmt::Class(class) => {
@@ -90,7 +90,7 @@ impl ModuleResolver {
                 _ => {}
             }
         }
-        
+
         let module_info = ModuleInfo {
             name: module_name.clone(),
             path: module_file,
@@ -99,9 +99,9 @@ impl ModuleResolver {
             functions,
             source: source.clone(),
         };
-        
+
         self.loaded_modules.insert(module_name, module_info);
-        
+
         Ok(())
     }
 
@@ -300,6 +300,16 @@ impl ModuleResolver {
                 name: "line".to_string(),
                 type_name: Some(Type::Str),
             }],
+            return_type: None,
+            return_optional: false,
+            is_method: false,
+            is_async: false,
+            is_native: true,
+        });
+
+        self.type_context.functions.insert("breakpoint".to_string(), FunctionSignature {
+            name: "breakpoint".to_string(),
+            params: vec![],
             return_type: None,
             return_optional: false,
             is_method: false,

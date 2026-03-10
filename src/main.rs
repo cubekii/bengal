@@ -14,6 +14,7 @@ async fn main() {
 
     let source_file = &args[1];
     let dump_bytecode = args.iter().any(|arg| arg == "--dump-bytecode");
+    let debug_mode = args.iter().any(|arg| arg == "--debug");
 
     let source = match fs::read_to_string(source_file) {
         Ok(content) => content,
@@ -23,7 +24,7 @@ async fn main() {
         }
     };
 
-    let compiler = Compiler::new(&source);
+    let mut compiler = Compiler::new(&source);
     let bytecode = match compiler.compile() {
         Ok(bc) => bc,
         Err(e) => {
@@ -47,6 +48,16 @@ async fn main() {
                     if i + 1 < bytecode.data.len() {
                         i += 1;
                         print!(" operand: 0x{:02X}", bytecode.data[i]);
+                    }
+                }
+                0x55 | 0x56 | 0x57 | 0x73 | 0x80 => {
+                    // 2-byte operands (u16)
+                    if i + 2 < bytecode.data.len() {
+                        let low = bytecode.data[i + 1];
+                        let high = bytecode.data[i + 2];
+                        let val = u16::from_le_bytes([low, high]);
+                        print!(" operand: 0x{:04X} ({})", val, val);
+                        i += 2;
                     }
                 }
                 0x42 | 0x46 => {
@@ -87,6 +98,12 @@ async fn main() {
     let mut executor = Executor::new();
     bengal_std::register_all(&mut executor.vm);
 
+    if debug_mode {
+        executor.vm.is_debugging = true;
+        // For testing, add a breakpoint at line 3 of the source file
+        executor.vm.breakpoints.insert((source_file.clone(), 3));
+    }
+
     if let Err(e) = executor.run_to_completion(bytecode, Some(source_file)).await {
         eprintln!("Runtime error: {}", e);
         std::process::exit(1);
@@ -96,13 +113,14 @@ async fn main() {
 fn get_opcode_name(op: u8) -> &'static str {
     match op {
         0x00 => "Nop",
-        0x10 => "PushString",
-        0x11 => "PushInt",
-        0x12 => "PushFloat",
-        0x13 => "PushBool",
-        0x14 => "PushNull",
-        0x20 => "LoadLocal",
-        0x21 => "StoreLocal",
+        0x10 => "LoadConst",
+        0x11 => "LoadInt",
+        0x12 => "LoadFloat",
+        0x13 => "LoadBool",
+        0x14 => "LoadNull",
+        0x20 => "Move",
+        0x21 => "LoadLocal",
+        0x22 => "StoreLocal",
         0x30 => "GetProperty",
         0x31 => "SetProperty",
         0x40 => "Call",
@@ -117,8 +135,6 @@ fn get_opcode_name(op: u8) -> &'static str {
         0x50 => "Jump",
         0x51 => "JumpIfTrue",
         0x52 => "JumpIfFalse",
-        0x53 => "JumpIfGreater",
-        0x54 => "JumpIfLess",
         0x60 => "Equal",
         0x61 => "NotEqual",
         0x62 => "And",
@@ -131,10 +147,13 @@ fn get_opcode_name(op: u8) -> &'static str {
         0x69 => "Subtract",
         0x70 => "Multiply",
         0x71 => "Divide",
-        0x72 => "Pop",
+        0x73 => "Line",
+        0x74 => "Cast",
+        0x75 => "Modulo",
         0x80 => "TryStart",
         0x81 => "TryEnd",
         0x82 => "Throw",
+        0x90 => "Breakpoint",
         0xFF => "Halt",
         _ => "Unknown",
     }

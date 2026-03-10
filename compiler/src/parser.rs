@@ -26,6 +26,8 @@ pub enum Stmt {
     If { condition: Expr, then_branch: Block, else_branch: Option<Block> },
     For { var_name: String, range: Box<Expr>, body: Block },
     While { condition: Expr, body: Block },
+    Break,
+    Continue,
     TryCatch { try_block: Block, catch_var: String, catch_block: Block },
     Throw(Expr),
 }
@@ -60,6 +62,7 @@ pub struct ClassDef {
     pub name: String,
     pub fields: Vec<Field>,
     pub methods: Vec<Method>,
+    pub is_native: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +103,27 @@ pub enum Expr {
     Interpolated { parts: Vec<InterpPart>, span: Span },
     Range { start: Box<Expr>, end: Box<Expr>, span: Span },
     Await { expr: Box<Expr>, span: Span },
+    Cast { expr: Box<Expr>, target_type: CastType, span: Span },
+    Array { elements: Vec<Expr>, span: Span },
+    Index { object: Box<Expr>, index: Box<Expr>, span: Span },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CastType {
+    Int,
+    Float,
+    Str,
+    Bool,
+    Int8,
+    UInt8,
+    Int16,
+    UInt16,
+    Int32,
+    UInt32,
+    Int64,
+    UInt64,
+    Float32,
+    Float64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -121,13 +145,21 @@ pub enum BinaryOp {
     Subtract,
     Multiply,
     Divide,
+    Modulo,
     Greater,
+    GreaterEqual,
     Less,
+    LessEqual,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum UnaryOp {
     Not,
+    PrefixIncrement,
+    PrefixDecrement,
+    PostfixIncrement,
+    PostfixDecrement,
+    Decrement, // Keep for backward compatibility if used elsewhere, but we'll use PostfixDecrement for x--
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +209,21 @@ impl Parser {
         let token = self.peek().clone();
         self.pos += 1;
         token
+    }
+
+    fn error(&self, message: &str) -> Result<Stmt, String> {
+        let span = self.compute_span(self.pos);
+        Err(format!("[{}:{}] {}", span.line, span.column, message))
+    }
+
+    fn error_expr(&self, message: &str) -> Result<Expr, String> {
+        let span = self.compute_span(self.pos);
+        Err(format!("[{}:{}] {}", span.line, span.column, message))
+    }
+
+    fn error_generic<T>(&self, message: &str) -> Result<T, String> {
+        let span = self.compute_span(self.pos);
+        Err(format!("[{}:{}] {}", span.line, span.column, message))
     }
 
     fn check(&self, token: &Token) -> bool {
@@ -231,7 +278,7 @@ impl Parser {
         } else if self.match_token(&Token::Import) {
             self.parse_import()?
         } else if self.match_token(&Token::Class) {
-            self.parse_class()?
+            self.parse_class(is_native)?
         } else if self.match_token(&Token::Enum) {
             self.parse_enum()?
         } else if self.match_token(&Token::Fn) {
@@ -246,6 +293,10 @@ impl Parser {
             self.parse_for()?
         } else if self.match_token(&Token::While) {
             self.parse_while()?
+        } else if self.match_token(&Token::Break) {
+            self.parse_break()?
+        } else if self.match_token(&Token::Continue) {
+            self.parse_continue()?
         } else if self.match_token(&Token::Try) {
             self.parse_try_catch()?
         } else if self.match_token(&Token::Throw) {
@@ -263,7 +314,7 @@ impl Parser {
                     if self.match_token(&Token::Semicolon) {}
                     Stmt::Expr(Expr::Set { object, name, value: Box::new(value), span })
                 } else {
-                    return Err("Left side of assignment must be a variable or property access".to_string());
+                    return self.error_generic("Left side of assignment must be a variable or property access");
                 }
             } else {
                 if self.match_token(&Token::Semicolon) {}
@@ -281,7 +332,7 @@ impl Parser {
             if let Token::Identifier(part) = self.advance() {
                 path.push(part);
             } else {
-                return Err("Expected identifier in import path".to_string());
+                return self.error("Expected identifier in import path");
             }
 
             if self.match_token(&Token::DoubleColon) {
@@ -304,7 +355,7 @@ impl Parser {
             if let Token::Identifier(part) = self.advance() {
                 path.push(part);
             } else {
-                return Err("Expected identifier in module path".to_string());
+                return self.error("Expected identifier in module path");
             }
 
             if self.match_token(&Token::DoubleColon) {
@@ -320,14 +371,14 @@ impl Parser {
         Ok(Stmt::Module { path })
     }
 
-    fn parse_class(&mut self) -> Result<Stmt, String> {
+    fn parse_class(&mut self, is_native_class: bool) -> Result<Stmt, String> {
         let name = match self.advance() {
             Token::Identifier(n) => n,
-            _ => return Err("Expected class name".to_string()),
+            _ => return self.error_generic("Expected class name"),
         };
 
         if !self.match_token(&Token::LBrace) {
-            return Err("Expected '{' after class name".to_string());
+            return self.error_generic("Expected '{' after class name");
         }
 
         let mut fields = Vec::new();
@@ -336,21 +387,35 @@ impl Parser {
         self.skip_newlines();
         while !self.check(&Token::RBrace) && !self.check(&Token::Eof) {
             let mut is_private = false;
-            let mut is_native = false;
+            let mut is_native_method = false;
             let mut is_async = false;
 
             self.skip_newlines();
             while self.check(&Token::Private) || self.check(&Token::Native) || self.check(&Token::Async) {
                 if self.match_token(&Token::Private) { is_private = true; }
-                else if self.match_token(&Token::Native) { is_native = true; }
+                else if self.match_token(&Token::Native) { 
+                    if !is_native_class {
+                        return self.error_generic("Class member-functions can't have 'native' modifier. Use 'native class' instead.");
+                    }
+                    is_native_method = true; 
+                }
                 else if self.match_token(&Token::Async) { is_async = true; }
                 self.skip_newlines();
             }
 
             if self.match_token(&Token::Fn) {
-                let method = self.parse_method(is_private, is_async, is_native)?;
+                let method = self.parse_method(is_private, is_async, is_native_method || is_native_class)?;
+                methods.push(method);
+            } else if self.match_token(&Token::Constructor) {
+                let method = self.parse_method_named("constructor", is_private, false, is_native_class)?;
+                if is_native_class && !method.body.is_empty() {
+                    return self.error_generic("Constructor in native classes cannot have implementation.");
+                }
                 methods.push(method);
             } else {
+                if is_native_class {
+                    return self.error_generic("Native classes cannot have member-fields.");
+                }
                 let field = self.parse_field(is_private)?;
                 fields.push(field);
             }
@@ -358,20 +423,20 @@ impl Parser {
         }
 
         if !self.match_token(&Token::RBrace) {
-            return Err("Expected '}' to close class".to_string());
+            return self.error_generic("Expected '}' to close class");
         }
 
-        Ok(Stmt::Class(ClassDef { name, fields, methods }))
+        Ok(Stmt::Class(ClassDef { name, fields, methods, is_native: is_native_class }))
     }
 
     fn parse_enum(&mut self) -> Result<Stmt, String> {
         let name = match self.advance() {
             Token::Identifier(n) => n,
-            _ => return Err("Expected enum name".to_string()),
+            _ => return self.error("Expected enum name"),
         };
 
         if !self.match_token(&Token::LBrace) {
-            return Err("Expected '{' after enum name".to_string());
+            return self.error("Expected '{' after enum name");
         }
 
         let mut variants = Vec::new();
@@ -380,7 +445,7 @@ impl Parser {
         while !self.check(&Token::RBrace) && !self.check(&Token::Eof) {
             let variant_name = match self.advance() {
                 Token::Identifier(n) => n,
-                _ => return Err("Expected variant name".to_string()),
+                _ => return self.error_generic("Expected variant name"),
             };
 
             let value = if self.match_token(&Token::Equal) {
@@ -397,7 +462,7 @@ impl Parser {
         }
 
         if !self.match_token(&Token::RBrace) {
-            return Err("Expected '}' to close enum".to_string());
+            return self.error("Expected '}' to close enum");
         }
 
         Ok(Stmt::Enum(EnumDef { name, variants }))
@@ -406,18 +471,18 @@ impl Parser {
     fn parse_function_ext(&mut self, _is_private: bool, is_async: bool, is_native: bool) -> Result<Stmt, String> {
         let name = match self.advance() {
             Token::Identifier(n) => n,
-            _ => return Err("Expected function name".to_string()),
+            _ => return self.error("Expected function name"),
         };
 
         if !self.match_token(&Token::LParen) {
-            return Err("Expected '(' after function name".to_string());
+            return self.error("Expected '(' after function name");
         }
 
         let params = self.parse_params()?;
         self.skip_newlines();
 
         if !self.match_token(&Token::RParen) {
-            return Err("Expected ')' after parameters".to_string());
+            return self.error("Expected ')' after parameters");
         }
 
         let (return_type, return_optional) = if self.match_token(&Token::Colon) {
@@ -434,7 +499,7 @@ impl Parser {
                 self.advance();
                 let b = self.parse_block()?;
                 if !self.match_token(&Token::RBrace) {
-                    return Err("Expected '}' to close native function body".to_string());
+                    return self.error_generic("Expected '}' to close native function body");
                 }
                 b
             } else {
@@ -443,13 +508,13 @@ impl Parser {
             }
         } else {
             if !self.match_token(&Token::LBrace) {
-                return Err(format!("Expected '{{' to start function body for '{}'", name));
+                return self.error(&format!("Expected '{{' to start function body for '{}'", name));
             }
 
             let body = self.parse_block()?;
 
             if !self.match_token(&Token::RBrace) {
-                return Err("Expected '}' to close function".to_string());
+                return self.error("Expected '}' to close function");
             }
             body
         };
@@ -468,11 +533,11 @@ impl Parser {
     fn parse_field(&mut self, private: bool) -> Result<Field, String> {
         let name = match self.advance() {
             Token::Identifier(n) => n,
-            t => return Err(format!("Expected field name, got {:?}", t)),
+            t => return self.error_generic(&format!("Expected field name, got {:?}", t)),
         };
 
         if !self.match_token(&Token::Colon) {
-            return Err(format!("Expected ':' after field name, got {:?}", self.peek()));
+            return self.error_generic(&format!("Expected ':' after field name, got {:?}", self.peek()));
         }
 
         let (mut type_name, optional) = self.parse_type()?;
@@ -496,18 +561,21 @@ impl Parser {
     fn parse_method(&mut self, private: bool, is_async: bool, is_native: bool) -> Result<Method, String> {
         let name = match self.advance() {
             Token::Identifier(n) => n,
-            _ => return Err("Expected method name".to_string()),
+            _ => return self.error_generic("Expected method name"),
         };
+        self.parse_method_named(&name, private, is_async, is_native)
+    }
 
+    fn parse_method_named(&mut self, name: &str, private: bool, is_async: bool, is_native: bool) -> Result<Method, String> {
         if !self.match_token(&Token::LParen) {
-            return Err("Expected '(' after method name".to_string());
+            return self.error_generic(&format!("Expected '(' after {} name", name));
         }
 
         let params = self.parse_params()?;
         self.skip_newlines();
 
         if !self.match_token(&Token::RParen) {
-            return Err("Expected ')' after parameters".to_string());
+            return self.error_generic("Expected ')' after parameters");
         }
 
         let (return_type, return_optional) = if self.match_token(&Token::Colon) {
@@ -524,7 +592,7 @@ impl Parser {
                 self.advance();
                 let b = self.parse_block()?;
                 if !self.match_token(&Token::RBrace) {
-                    return Err("Expected '}' to close native method body".to_string());
+                    return self.error_generic(&format!("Expected '}}' to close native {} body", name));
                 }
                 b
             } else {
@@ -532,18 +600,18 @@ impl Parser {
             }
         } else {
             if !self.match_token(&Token::LBrace) {
-                return Err("Expected '{' to start method body".to_string());
+                return self.error_generic(&format!("Expected '{{' to start {} body", name));
             }
 
             let body = self.parse_block()?;
 
             if !self.match_token(&Token::RBrace) {
-                return Err("Expected '}' to close method".to_string());
+                return self.error_generic(&format!("Expected '}}' to close {}", name));
             }
             body
         };
 
-        Ok(Method { name, params, return_type, return_optional, body, private, is_async, is_native })
+        Ok(Method { name: name.to_string(), params, return_type, return_optional, body, private, is_async, is_native })
     }
 
     fn parse_params(&mut self) -> Result<Vec<Param>, String> {
@@ -565,7 +633,12 @@ impl Parser {
             let mut param_type: Option<String> = None;
 
             let is_type_start = (self.check(&Token::TypeInt) || self.check(&Token::TypeFloat) ||
-               self.check(&Token::TypeStr) || self.check(&Token::TypeBool)) &&
+               self.check(&Token::TypeStr) || self.check(&Token::TypeBool) ||
+               self.check(&Token::TypeInt8) || self.check(&Token::TypeUInt8) ||
+               self.check(&Token::TypeInt16) || self.check(&Token::TypeUInt16) ||
+               self.check(&Token::TypeInt32) || self.check(&Token::TypeUInt32) ||
+               self.check(&Token::TypeInt64) || self.check(&Token::TypeUInt64) ||
+               self.check(&Token::TypeFloat32) || self.check(&Token::TypeFloat64)) &&
                matches!(self.peek_next(), Token::Identifier(_));
 
             let is_class_type = !is_type_start && matches!(self.peek(), Token::Identifier(_)) &&
@@ -599,7 +672,7 @@ impl Parser {
 
             let name = match self.advance() {
                 Token::Identifier(n) => n,
-                t => return Err(format!("Expected parameter name, got {:?}", t)),
+                t => return self.error_generic(&format!("Expected parameter name, got {:?}", t)),
             };
 
             let type_name = if self.match_token(&Token::Colon) {
@@ -630,9 +703,19 @@ impl Parser {
             Token::TypeFloat => "float".to_string(),
             Token::TypeStr => "str".to_string(),
             Token::TypeBool => "bool".to_string(),
+            Token::TypeInt8 => "int8".to_string(),
+            Token::TypeUInt8 => "uint8".to_string(),
+            Token::TypeInt16 => "int16".to_string(),
+            Token::TypeUInt16 => "uint16".to_string(),
+            Token::TypeInt32 => "int32".to_string(),
+            Token::TypeUInt32 => "uint32".to_string(),
+            Token::TypeInt64 => "int64".to_string(),
+            Token::TypeUInt64 => "uint64".to_string(),
+            Token::TypeFloat32 => "float32".to_string(),
+            Token::TypeFloat64 => "float64".to_string(),
             Token::Null => "null".to_string(),
             Token::Identifier(t) => t.clone(),
-            _ => return Err(format!("Expected type name, got {:?}", token)),
+            _ => return self.error_generic(&format!("Expected type name, got {:?}", token)),
         };
 
         let optional = self.match_token(&Token::Question);
@@ -643,11 +726,16 @@ impl Parser {
     fn parse_let(&mut self) -> Result<Stmt, String> {
         let name = match self.advance() {
             Token::Identifier(n) => n,
-            _ => return Err("Expected variable name after 'let'".to_string()),
+            _ => return self.error("Expected variable name after 'let'"),
         };
 
+        if self.match_token(&Token::Colon) {
+            let (_type_name, _optional) = self.parse_type()?;
+            // For now we just consume it, TypeChecker handles it via inference or we could store it in AST
+        }
+
         if !self.match_token(&Token::Equal) {
-            return Err("Expected '=' in let statement".to_string());
+            return self.error("Expected '=' in let statement");
         }
 
         let expr = self.parse_expression()?;
@@ -671,29 +759,29 @@ impl Parser {
 
     fn parse_if(&mut self) -> Result<Stmt, String> {
         if !self.match_token(&Token::LParen) {
-            return Err("Expected '(' after 'if'".to_string());
+            return self.error("Expected '(' after 'if'");
         }
 
         let condition = self.parse_expression()?;
         self.skip_newlines();
 
         if !self.match_token(&Token::RParen) {
-            return Err("Expected ')' after condition".to_string());
+            return self.error("Expected ')' after condition");
         }
 
         if !self.match_token(&Token::LBrace) {
-            return Err("Expected '{' for if body".to_string());
+            return self.error("Expected '{' for if body");
         }
 
         let then_branch = self.parse_block()?;
 
         if !self.match_token(&Token::RBrace) {
-            return Err("Expected '}' to close if body".to_string());
+            return self.error("Expected '}' to close if body");
         }
 
         let else_branch = if self.match_token(&Token::Else) {
             if !self.match_token(&Token::LBrace) {
-                return Err("Expected '{' for else body".to_string());
+                return self.error("Expected '{' for else body");
             }
             Some(self.parse_block()?)
         } else {
@@ -705,32 +793,32 @@ impl Parser {
 
     fn parse_for(&mut self) -> Result<Stmt, String> {
         if !self.match_token(&Token::LParen) {
-            return Err("Expected '(' after 'for'".to_string());
+            return self.error("Expected '(' after 'for'");
         }
 
         let var_name = match self.advance() {
             Token::Identifier(name) => name,
-            _ => return Err("Expected variable name in for loop".to_string()),
+            _ => return self.error("Expected variable name in for loop"),
         };
 
         if !self.match_token(&Token::In) {
-            return Err("Expected 'in' after loop variable".to_string());
+            return self.error("Expected 'in' after loop variable");
         }
 
         let range = self.parse_range()?;
 
         if !self.match_token(&Token::RParen) {
-            return Err("Expected ')' after range expression".to_string());
+            return self.error("Expected ')' after range expression");
         }
 
         if !self.match_token(&Token::LBrace) {
-            return Err("Expected '{' for loop body".to_string());
+            return self.error("Expected '{' for loop body");
         }
 
         let body = self.parse_block()?;
 
         if !self.match_token(&Token::RBrace) {
-            return Err("Expected '}' to close loop body".to_string());
+            return self.error("Expected '}' to close loop body");
         }
 
         Ok(Stmt::For { var_name, range: Box::new(range), body })
@@ -738,66 +826,76 @@ impl Parser {
 
     fn parse_while(&mut self) -> Result<Stmt, String> {
         if !self.match_token(&Token::LParen) {
-            return Err("Expected '(' after 'while'".to_string());
+            return self.error("Expected '(' after 'while'");
         }
 
         let condition = self.parse_expression()?;
 
         if !self.match_token(&Token::RParen) {
-            return Err("Expected ')' after condition".to_string());
+            return self.error("Expected ')' after condition");
         }
 
         if !self.match_token(&Token::LBrace) {
-            return Err("Expected '{' for while body".to_string());
+            return self.error("Expected '{' for while body");
         }
 
         let body = self.parse_block()?;
 
         if !self.match_token(&Token::RBrace) {
-            return Err("Expected '}' to close while body".to_string());
+            return self.error("Expected '}' to close while body");
         }
 
         Ok(Stmt::While { condition, body })
     }
 
+    fn parse_break(&mut self) -> Result<Stmt, String> {
+        if self.match_token(&Token::Semicolon) {}
+        Ok(Stmt::Break)
+    }
+
+    fn parse_continue(&mut self) -> Result<Stmt, String> {
+        if self.match_token(&Token::Semicolon) {}
+        Ok(Stmt::Continue)
+    }
+
     fn parse_try_catch(&mut self) -> Result<Stmt, String> {
         if !self.match_token(&Token::LBrace) {
-            return Err("Expected '{' for try body".to_string());
+            return self.error("Expected '{' for try body");
         }
 
         let try_block = self.parse_block()?;
 
         if !self.match_token(&Token::RBrace) {
-            return Err("Expected '}' to close try body".to_string());
+            return self.error("Expected '}' to close try body");
         }
 
         self.skip_newlines();
 
         if !self.match_token(&Token::Catch) {
-            return Err("Expected 'catch' after try block".to_string());
+            return self.error("Expected 'catch' after try block");
         }
 
         if !self.match_token(&Token::LParen) {
-            return Err("Expected '(' after 'catch'".to_string());
+            return self.error("Expected '(' after 'catch'");
         }
 
         let catch_var = match self.advance() {
             Token::Identifier(n) => n,
-            _ => return Err("Expected identifier for catch variable".to_string()),
+            _ => return self.error("Expected identifier for catch variable"),
         };
 
         if !self.match_token(&Token::RParen) {
-            return Err("Expected ')' after catch variable".to_string());
+            return self.error("Expected ')' after catch variable");
         }
 
         if !self.match_token(&Token::LBrace) {
-            return Err("Expected '{' for catch body".to_string());
+            return self.error("Expected '{' for catch body");
         }
 
         let catch_block = self.parse_block()?;
 
         if !self.match_token(&Token::RBrace) {
-            return Err("Expected '}' to close catch body".to_string());
+            return self.error("Expected '}' to close catch body");
         }
 
         Ok(Stmt::TryCatch { try_block, catch_var, catch_block })
@@ -877,6 +975,14 @@ impl Parser {
                     right: Box::new(self.parse_comparison()?),
                     span,
                 };
+            } else if self.match_token(&Token::DoubleEqual) {
+                let span = self.compute_span(self.pos - 1);
+                expr = Expr::Binary {
+                    left: Box::new(expr),
+                    op: BinaryOp::Equal,
+                    right: Box::new(self.parse_comparison()?),
+                    span,
+                };
             } else {
                 break;
             }
@@ -897,11 +1003,27 @@ impl Parser {
                     right: Box::new(self.parse_additive()?),
                     span,
                 };
+            } else if self.match_token(&Token::GreaterEqual) {
+                let span = self.compute_span(self.pos - 1);
+                expr = Expr::Binary {
+                    left: Box::new(expr),
+                    op: BinaryOp::GreaterEqual,
+                    right: Box::new(self.parse_additive()?),
+                    span,
+                };
             } else if self.match_token(&Token::Less) {
                 let span = self.compute_span(self.pos - 1);
                 expr = Expr::Binary {
                     left: Box::new(expr),
                     op: BinaryOp::Less,
+                    right: Box::new(self.parse_additive()?),
+                    span,
+                };
+            } else if self.match_token(&Token::LessEqual) {
+                let span = self.compute_span(self.pos - 1);
+                expr = Expr::Binary {
+                    left: Box::new(expr),
+                    op: BinaryOp::LessEqual,
                     right: Box::new(self.parse_additive()?),
                     span,
                 };
@@ -961,6 +1083,14 @@ impl Parser {
                     right: Box::new(self.parse_unary()?),
                     span,
                 };
+            } else if self.match_token(&Token::Percent) {
+                let span = self.compute_span(self.pos - 1);
+                expr = Expr::Binary {
+                    left: Box::new(expr),
+                    op: BinaryOp::Modulo,
+                    right: Box::new(self.parse_unary()?),
+                    span,
+                };
             } else {
                 break;
             }
@@ -977,6 +1107,34 @@ impl Parser {
                 expr: Box::new(self.parse_unary()?),
                 span,
             });
+        }
+
+        if self.match_token(&Token::PlusPlus) {
+            let span = self.compute_span(self.pos - 1);
+            let expr = self.parse_unary()?;
+            if let Expr::Variable { .. } = &expr {
+                return Ok(Expr::Unary {
+                    op: UnaryOp::PrefixIncrement,
+                    expr: Box::new(expr),
+                    span,
+                });
+            } else {
+                return self.error_expr("Prefix increment operator requires a variable");
+            }
+        }
+
+        if self.match_token(&Token::MinusMinus) {
+            let span = self.compute_span(self.pos - 1);
+            let expr = self.parse_unary()?;
+            if let Expr::Variable { .. } = &expr {
+                return Ok(Expr::Unary {
+                    op: UnaryOp::PrefixDecrement,
+                    expr: Box::new(expr),
+                    span,
+                });
+            } else {
+                return self.error_expr("Prefix decrement operator requires a variable");
+            }
         }
 
         if self.match_token(&Token::Await) {
@@ -999,11 +1157,54 @@ impl Parser {
                 let span = self.compute_span(self.pos - 1);
                 self.skip_newlines();
                 if !self.match_token(&Token::RParen) {
-                    return Err("Expected ')' after arguments".to_string());
+                    return self.error_expr("Expected ')' after arguments");
                 }
+                
+                // Check if this is a cast expression (str(x), int(x), float(x), bool(x))
+                if args.len() == 1 {
+                    if let Expr::Variable { name, .. } = &expr {
+                        let cast_type = match name.as_str() {
+                            "str" => Some(CastType::Str),
+                            "int" => Some(CastType::Int),
+                            "float" => Some(CastType::Float),
+                            "bool" => Some(CastType::Bool),
+                            "int8" => Some(CastType::Int8),
+                            "uint8" => Some(CastType::UInt8),
+                            "int16" => Some(CastType::Int16),
+                            "uint16" => Some(CastType::UInt16),
+                            "int32" => Some(CastType::Int32),
+                            "uint32" => Some(CastType::UInt32),
+                            "int64" => Some(CastType::Int64),
+                            "uint64" => Some(CastType::UInt64),
+                            "float32" => Some(CastType::Float32),
+                            "float64" => Some(CastType::Float64),
+                            _ => None,
+                        };
+                        if let Some(target_type) = cast_type {
+                            expr = Expr::Cast {
+                                expr: Box::new(args.into_iter().next().unwrap()),
+                                target_type,
+                                span,
+                            };
+                            continue;
+                        }
+                    }
+                }
+                
                 expr = Expr::Call {
                     callee: Box::new(expr),
                     args,
+                    span,
+                };
+            } else if self.match_token(&Token::LBracket) {
+                let index = self.parse_expression()?;
+                if !self.match_token(&Token::RBracket) {
+                    return self.error_expr("Expected ']' after array index");
+                }
+                let span = self.compute_span(self.pos - 1);
+                expr = Expr::Index {
+                    object: Box::new(expr),
+                    index: Box::new(index),
                     span,
                 };
             } else if self.match_token(&Token::LBrace) {
@@ -1036,7 +1237,7 @@ impl Parser {
                 }
                 self.skip_newlines();
                 if !self.match_token(&Token::RBrace) {
-                    return Err("Expected '}' to close class instantiation".to_string());
+                    return self.error_expr("Expected '}' to close class instantiation");
                 }
                 // For now, class instantiation is just a Call with no args
                 let span = self.compute_span(self.pos - 1);
@@ -1048,7 +1249,7 @@ impl Parser {
             } else if self.match_token(&Token::Dot) {
                 let name = match self.advance() {
                     Token::Identifier(n) => n,
-                    _ => return Err("Expected identifier after '.'".to_string()),
+                    _ => return self.error_expr("Expected identifier after '.'"),
                 };
                 let span = self.compute_span(self.pos - 1);
                 expr = Expr::Get {
@@ -1056,8 +1257,31 @@ impl Parser {
                     name,
                     span,
                 };
-            } else {
-                break;
+            } else if self.match_token(&Token::PlusPlus) {
+                // Postfix increment: var++
+                let span = self.compute_span(self.pos - 1);
+                if let Expr::Variable { name, span: var_span } = &expr {
+                    expr = Expr::Unary {
+                    op: UnaryOp::PostfixIncrement,
+                    expr: Box::new(Expr::Variable { name: name.clone(), span: *var_span }),
+                    span,
+                    };
+                    } else {
+                    return self.error_expr("Increment operator requires a variable");
+                    }
+                    } else if self.match_token(&Token::MinusMinus) {
+                    // Postfix decrement: var--
+                    let span = self.compute_span(self.pos - 1);
+                    if let Expr::Variable { name, span: var_span } = &expr {
+                    expr = Expr::Unary {
+                    op: UnaryOp::PostfixDecrement,
+                    expr: Box::new(Expr::Variable { name: name.clone(), span: *var_span }),
+                    span,
+                    };
+                    } else {
+                    return self.error_expr("Decrement operator requires a variable");
+                    }
+                    } else {                break;
             }
         }
 
@@ -1095,7 +1319,7 @@ impl Parser {
             Token::LParen => {
                 let expr = self.parse_expression()?;
                 if !self.match_token(&Token::RParen) {
-                    return Err("Expected ')' after expression".to_string());
+                    return self.error_expr("Expected ')' after expression");
                 }
                 Ok(expr)
             },
@@ -1106,7 +1330,7 @@ impl Parser {
                     if let Token::Identifier(part) = self.advance() {
                         full_name.push_str(&part);
                     } else {
-                        return Err("Expected identifier after ::".to_string());
+                        return self.error_expr("Expected identifier after ::");
                     }
                 }
 
@@ -1119,21 +1343,95 @@ impl Parser {
                     Ok(Expr::Variable { name: full_name, span })
                 }
             },
+            // Handle type keywords as potential cast functions
+            Token::LBracket => {
+                let span = self.compute_span(token_pos);
+                let mut elements = Vec::new();
+                self.skip_newlines();
+                while !self.check(&Token::RBracket) && !self.check(&Token::Eof) {
+                    elements.push(self.parse_expression()?);
+                    self.skip_newlines();
+                    if !self.match_token(&Token::Comma) {
+                        break;
+                    }
+                    self.skip_newlines();
+                }
+                if !self.match_token(&Token::RBracket) {
+                    return self.error_expr("Expected ']' after array elements");
+                }
+                Ok(Expr::Array { elements, span })
+            },
+            Token::TypeInt => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "int".to_string(), span })
+            },
+            Token::TypeFloat => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "float".to_string(), span })
+            },
+            Token::TypeStr => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "str".to_string(), span })
+            },
+            Token::TypeBool => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "bool".to_string(), span })
+            },
+            Token::TypeInt8 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "int8".to_string(), span })
+            },
+            Token::TypeUInt8 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "uint8".to_string(), span })
+            },
+            Token::TypeInt16 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "int16".to_string(), span })
+            },
+            Token::TypeUInt16 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "uint16".to_string(), span })
+            },
+            Token::TypeInt32 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "int32".to_string(), span })
+            },
+            Token::TypeUInt32 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "uint32".to_string(), span })
+            },
+            Token::TypeInt64 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "int64".to_string(), span })
+            },
+            Token::TypeUInt64 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "uint64".to_string(), span })
+            },
+            Token::TypeFloat32 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "float32".to_string(), span })
+            },
+            Token::TypeFloat64 => {
+                let span = self.compute_span(token_pos);
+                Ok(Expr::Variable { name: "float64".to_string(), span })
+            },
             Token::Dollar => self.parse_interpolated_string(),
-            token => Err(format!("Unexpected token: {:?}", token)),
+            token => self.error_expr(&format!("Unexpected token: {:?}", token)),
         }
     }
 
     fn parse_interpolated_string(&mut self) -> Result<Expr, String> {
         if !self.match_token(&Token::LBrace) {
-            return Err("Expected '{' after '$' in interpolated string".to_string());
+            return self.error_expr("Expected '{' after '$' in interpolated string");
         }
 
         let span = self.compute_span(self.pos - 1);
         let expr = self.parse_expression()?;
 
         if !self.match_token(&Token::RBrace) {
-            return Err("Expected '}' to close interpolated expression".to_string());
+            return self.error_expr("Expected '}' to close interpolated expression");
         }
 
         Ok(Expr::Interpolated {
@@ -1175,7 +1473,7 @@ impl Parser {
                 parts.push(InterpPart::Expr(expr));
                 last_pos = abs_start + 2 + interp_end + 1;
             } else {
-                return Err("Unclosed interpolation ${...}".to_string());
+                return self.error_expr("Unclosed interpolation ${...}");
             }
         }
 

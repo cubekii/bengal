@@ -25,30 +25,51 @@ pub enum Token {
     Try,
     Catch,
     Throw,
+    Break,
+    Continue,
+    Constructor,
 
     TypeInt,
     TypeFloat,
     TypeStr,
     TypeBool,
+    TypeInt8,
+    TypeUInt8,
+    TypeInt16,
+    TypeUInt16,
+    TypeInt32,
+    TypeUInt32,
+    TypeInt64,
+    TypeUInt64,
+    TypeFloat32,
+    TypeFloat64,
 
     Equal,
+    DoubleEqual,
     Bang,
     BangEqual,
     Question,
     Range,
 
     Plus,
+    PlusPlus,
     Minus,
+    MinusMinus,
     Star,
     Slash,
+    Percent,
 
     Greater,
+    GreaterEqual,
     Less,
+    LessEqual,
 
     LParen,
     RParen,
     LBrace,
     RBrace,
+    LBracket,
+    RBracket,
     Colon,
     DoubleColon,
     Comma,
@@ -87,6 +108,21 @@ impl Lexer {
         ch
     }
 
+    fn get_pos(&self) -> (usize, usize) {
+        let source_up_to_pos = &self.chars[..self.pos.min(self.chars.len())];
+        let line = source_up_to_pos.iter().filter(|&&c| c == '\n').count() + 1;
+        
+        let mut last_newline = 0;
+        for (i, &c) in source_up_to_pos.iter().enumerate() {
+            if c == '\n' {
+                last_newline = i + 1;
+            }
+        }
+        let column = self.pos - last_newline + 1;
+        
+        (line, column)
+    }
+
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.peek() {
             if ch.is_whitespace() && ch != '\n' {
@@ -97,7 +133,7 @@ impl Lexer {
         }
     }
 
-    fn skip_comment(&mut self) {
+    fn skip_comment(&mut self) -> bool {
         // Line comment: //
         if self.peek() == Some('/') && self.peek_next() == Some('/') {
             self.advance(); // skip first /
@@ -108,6 +144,7 @@ impl Lexer {
                 }
                 self.advance();
             }
+            true
         }
         // Block comment: /* */
         else if self.peek() == Some('/') && self.peek_next() == Some('*') {
@@ -132,6 +169,9 @@ impl Lexer {
                     self.advance();
                 }
             }
+            true
+        } else {
+            false
         }
     }
 
@@ -150,6 +190,8 @@ impl Lexer {
             ')' => { self.advance(); Ok(Token::RParen) }
             '{' => { self.advance(); Ok(Token::LBrace) }
             '}' => { self.advance(); Ok(Token::RBrace) }
+            '[' => { self.advance(); Ok(Token::LBracket) }
+            ']' => { self.advance(); Ok(Token::RBracket) }
             ':' => {
                 self.advance();
                 if self.peek() == Some(':') {
@@ -175,7 +217,7 @@ impl Lexer {
                 self.advance();
                 if self.peek() == Some('=') {
                     self.advance();
-                    Ok(Token::BangEqual)
+                    Ok(Token::DoubleEqual)
                 } else {
                     Ok(Token::Equal)
                 }
@@ -190,29 +232,60 @@ impl Lexer {
                 }
             }
             '?' => { self.advance(); Ok(Token::Question) }
-            '+' => { self.advance(); Ok(Token::Plus) }
-            '-' => { self.advance(); Ok(Token::Minus) }
-            '*' => { self.advance(); Ok(Token::Star) }
-            '/' => {
+            '+' => {
                 self.advance();
-                if self.peek() == Some('/') {
-                    // This is a comment, skip it
-                    self.skip_comment();
-                    self.next_token_inner()
+                if self.peek() == Some('+') {
+                    self.advance();
+                    Ok(Token::PlusPlus)
                 } else {
-                    Ok(Token::Slash)
+                    Ok(Token::Plus)
                 }
             }
+            '-' => {
+                self.advance();
+                if self.peek() == Some('-') {
+                    self.advance();
+                    Ok(Token::MinusMinus)
+                } else {
+                    Ok(Token::Minus)
+                }
+            }
+            '*' => { self.advance(); Ok(Token::Star) }
+            '%' => { self.advance(); Ok(Token::Percent) }
+            '/' => {
+                self.advance();
+                Ok(Token::Slash)
+            }
             '"' => self.read_string(),
-            '>' => { self.advance(); Ok(Token::Greater) }
-            '<' => { self.advance(); Ok(Token::Less) }
+            '>' => {
+                self.advance();
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::GreaterEqual)
+                } else {
+                    Ok(Token::Greater)
+                }
+            }
+            '<' => {
+                self.advance();
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::LessEqual)
+                } else {
+                    Ok(Token::Less)
+                }
+            }
             c if c.is_alphabetic() || c == '_' => self.read_identifier(),
             c if c.is_ascii_digit() => self.read_number(),
-            _ => Err(format!("Unexpected character: '{}'", ch)),
+            _ => {
+                let (line, col) = self.get_pos();
+                Err(format!("[{}:{}] Unexpected character: '{}'", line, col, ch))
+            },
         }
     }
 
     fn read_string(&mut self) -> Result<Token, String> {
+        let (line, col) = self.get_pos();
         self.advance(); // consume first "
         
         if self.peek() == Some('"') && self.peek_next() == Some('"') {
@@ -227,13 +300,28 @@ impl Lexer {
                 self.advance();
                 return Ok(Token::String(s));
             }
-            s.push(ch);
-            self.advance();
+            if ch == '\\' {
+                self.advance();
+                match self.peek() {
+                    Some('n') => s.push('\n'),
+                    Some('r') => s.push('\r'),
+                    Some('t') => s.push('\t'),
+                    Some('\\') => s.push('\\'),
+                    Some('"') => s.push('"'),
+                    Some(c) => s.push(c),
+                    None => return Err(format!("[{}:{}] Unterminated string escape", line, col)),
+                }
+                self.advance();
+            } else {
+                s.push(ch);
+                self.advance();
+            }
         }
-        Err("Unterminated string".to_string())
+        Err(format!("[{}:{}] Unterminated string", line, col))
     }
 
     fn read_multiline_string(&mut self) -> Result<Token, String> {
+        let (line, col) = self.get_pos();
         let mut s = String::new();
         while let Some(ch) = self.peek() {
             if ch == '"' && self.peek_next() == Some('"') && self.chars.get(self.pos + 2) == Some(&'"') {
@@ -244,10 +332,24 @@ impl Lexer {
                 let processed = self.process_multiline_string(&s);
                 return Ok(Token::String(processed));
             }
-            s.push(ch);
-            self.advance();
+            if ch == '\\' {
+                self.advance();
+                match self.peek() {
+                    Some('n') => s.push('\n'),
+                    Some('r') => s.push('\r'),
+                    Some('t') => s.push('\t'),
+                    Some('\\') => s.push('\\'),
+                    Some('"') => s.push('"'),
+                    Some(c) => s.push(c),
+                    None => return Err(format!("[{}:{}] Unterminated multiline string escape", line, col)),
+                }
+                self.advance();
+            } else {
+                s.push(ch);
+                self.advance();
+            }
         }
-        Err("Unterminated multiline string".to_string())
+        Err(format!("[{}:{}] Unterminated multiline string", line, col))
     }
 
     fn process_multiline_string(&self, s: &str) -> String {
@@ -328,10 +430,23 @@ impl Lexer {
             "try" => Token::Try,
             "catch" => Token::Catch,
             "throw" => Token::Throw,
+            "break" => Token::Break,
+            "continue" => Token::Continue,
+            "constructor" => Token::Constructor,
             "int" => Token::TypeInt,
             "float" => Token::TypeFloat,
             "str" => Token::TypeStr,
             "bool" => Token::TypeBool,
+            "int8" => Token::TypeInt8,
+            "uint8" => Token::TypeUInt8,
+            "int16" => Token::TypeInt16,
+            "uint16" => Token::TypeUInt16,
+            "int32" => Token::TypeInt32,
+            "uint32" => Token::TypeUInt32,
+            "int64" => Token::TypeInt64,
+            "uint64" => Token::TypeUInt64,
+            "float32" => Token::TypeFloat32,
+            "float64" => Token::TypeFloat64,
             _ => Token::Identifier(s),
         };
         Ok(token)
@@ -362,24 +477,41 @@ impl Lexer {
         }
 
         if is_float {
+            let (line, col) = self.get_pos();
             s.parse::<f64>()
                 .map(Token::Float)
-                .map_err(|e| format!("Invalid float: {}", e))
+                .map_err(|e| format!("[{}:{}] Invalid float: {}", line, col, e))
         } else {
+            let (line, col) = self.get_pos();
             s.parse::<i64>()
                 .map(Token::Int)
-                .map_err(|e| format!("Invalid int: {}", e))
+                .map_err(|e| format!("[{}:{}] Invalid int: {}", line, col, e))
         }
     }
 
     pub fn tokenize(&mut self) -> Result<(Vec<Token>, Vec<usize>), String> {
+        // Skip shebang line if it exists at the very beginning
+        if self.pos == 0 && self.peek() == Some('#') && self.peek_next() == Some('!') {
+            while let Some(ch) = self.peek() {
+                if ch == '\n' {
+                    break;
+                }
+                self.advance();
+            }
+        }
+
         let mut tokens = Vec::new();
         let mut token_positions = Vec::new();
         loop {
-            self.skip_whitespace();
-            self.skip_comment();
-            self.skip_whitespace();
-            let token_pos = self.pos;  // Record position after skipping whitespace
+            // Skip all whitespace and comments
+            loop {
+                self.skip_whitespace();
+                if !self.skip_comment() {
+                    break;
+                }
+            }
+
+            let token_pos = self.pos;
             let token = self.next_token_inner()?;
             if token == Token::Eof {
                 tokens.push(token);
