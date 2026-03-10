@@ -18,6 +18,7 @@ pub struct ModuleInfo {
     pub statements: Vec<Stmt>,
     pub classes: Vec<String>,
     pub functions: Vec<String>,
+    pub source: String,
 }
 
 impl ModuleResolver {
@@ -70,11 +71,11 @@ impl ModuleResolver {
         // Read and parse the module
         let source = fs::read_to_string(&module_file)
             .map_err(|e| format!("Failed to read module '{}': {}", module_file.display(), e))?;
-        
+
         let mut lexer = Lexer::new(&source);
-        let tokens = lexer.tokenize()?;
-        
-        let mut parser = Parser::new(tokens);
+        let (tokens, token_positions) = lexer.tokenize()?;
+
+        let mut parser = Parser::new(tokens, &source, token_positions);
         let statements = parser.parse()?;
         
         // Create module info
@@ -96,6 +97,7 @@ impl ModuleResolver {
             statements,
             classes,
             functions,
+            source: source.clone(),
         };
         
         self.loaded_modules.insert(module_name, module_info);
@@ -160,6 +162,10 @@ impl ModuleResolver {
     }
 
     pub fn build_type_context(&mut self, main_statements: &[Stmt]) -> Result<TypeContext, String> {
+        self.build_type_context_with_source(main_statements, "", None)
+    }
+
+    pub fn build_type_context_with_source(&mut self, main_statements: &[Stmt], main_source: &str, main_source_path: Option<&str>) -> Result<TypeContext, String> {
         // First, process all imports
         self.process_imports(main_statements)?;
 
@@ -169,47 +175,84 @@ impl ModuleResolver {
             .map(|(name, info)| (name.clone(), info.statements.clone()))
             .collect();
         
-        for (_module_name, statements) in &module_statements {
-            self.register_module_types(statements);
+        for (module_name, statements) in &module_statements {
+            self.register_module_types(module_name, statements);
         }
 
-        // Register native functions from std.io
+        // Register native functions from std::io
         self.register_native_functions();
 
-        // Now type check all loaded modules
+        // Now type check all loaded modules (skip function registration since they're already registered with qualified names)
         for (module_name, statements) in &module_statements {
             let ctx = self.type_context.clone();
             let mut type_checker = TypeChecker::with_context(ctx);
-            if let Err(errors) = type_checker.check(statements) {
-                // Log errors but continue
-                for error in errors {
+            let _ = type_checker.check_with_options(statements, true);
+
+            // Log errors but continue
+            if type_checker.get_context().has_errors() {
+                for error in type_checker.get_context().get_errors() {
                     eprintln!("Type error in module '{}': {}", module_name, error.message);
                 }
             }
-            // Merge the context back
+
+            // Merge the context back (including errors)
             self.type_context = type_checker.get_context().clone();
         }
 
         // Type check main statements
         let ctx = self.type_context.clone();
         let mut type_checker = TypeChecker::with_context(ctx);
+
         match type_checker.check(main_statements) {
             Ok(ctx) => Ok(ctx.clone()),
             Err(errors) => {
-                let mut error_msg = String::from("Type checking failed:\n");
-                for error in errors {
-                    error_msg.push_str(&format!("  - {}\n", error.message));
+                let mut error_msg = String::new();
+                let source_lines: Vec<&str> = main_source.lines().collect();
+                
+                for mut error in errors {
+                    // Set source file if not already set
+                    if error.source_file.is_none() {
+                        if let Some(path) = main_source_path {
+                            error.source_file = Some(path.to_string());
+                        }
+                    }
+                    
+                    // Extract source line if we have line number
+                    if error.source_line.is_none() && error.line > 0 && error.line <= source_lines.len() {
+                        error.source_line = Some(source_lines[error.line - 1].to_string());
+                    }
+                    
+                    // Format: FILE:LINE:COLUMN: error: message
+                    let location = if let Some(ref file) = error.source_file {
+                        format!("{}:{}:{}", file, error.line, error.column)
+                    } else {
+                        format!("{}:{}", error.line, error.column)
+                    };
+                    
+                    error_msg.push_str(&format!("{}: error: {}\n", location, error.message));
+                    
+                    // Show code snippet if available
+                    if let Some(ref source_line) = error.source_line {
+                        error_msg.push_str(&format!("  {}\n", source_line));
+                        // Show caret pointing to the column
+                        let caret_pos = error.column.saturating_sub(1);
+                        let caret_line: String = " ".repeat(caret_pos) + "^";
+                        error_msg.push_str(&format!("  {}\n", caret_line));
+                    }
                 }
-                Err(error_msg)
+                Err(error_msg.trim().to_string())
             }
         }
     }
 
-    fn register_module_types(&mut self, statements: &[Stmt]) {
+    fn register_module_types(&mut self, module_name: &str, statements: &[Stmt]) {
         for stmt in statements {
             match stmt {
                 Stmt::Class(class) => {
-                    self.type_context.add_class(class);
+                    let mut class_with_module = class.clone();
+                    class_with_module.name = format!("{}::{}", module_name, class.name);
+                    self.type_context.add_class(&class_with_module);
+                    self.type_context.add_class(class); // Also add without module for now
                 }
                 Stmt::Enum(enum_def) => {
                     self.type_context.add_enum(enum_def);
@@ -220,13 +263,15 @@ impl ModuleResolver {
                         type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
                     }).collect();
 
-                    self.type_context.add_function(&func.name, FunctionSignature {
-                        name: func.name.clone(),
+                    let full_name = format!("{}::{}", module_name, func.name);
+                    self.type_context.add_function(&full_name, FunctionSignature {
+                        name: full_name.clone(),
                         params,
                         return_type: func.return_type.as_ref().map(|t| Type::from_str(t)),
                         return_optional: func.return_optional,
                         is_method: false,
                         is_async: func.is_async,
+                        is_native: func.is_native,
                     });
                 }
                 _ => {}
@@ -235,7 +280,7 @@ impl ModuleResolver {
     }
 
     fn register_native_functions(&mut self) {
-        // std.io functions
+        // std::io functions
         self.type_context.functions.insert("print".to_string(), FunctionSignature {
             name: "print".to_string(),
             params: vec![ParamSignature {
@@ -246,6 +291,7 @@ impl ModuleResolver {
             return_optional: false,
             is_method: false,
             is_async: false,
+            is_native: true,
         });
 
         self.type_context.functions.insert("println".to_string(), FunctionSignature {
@@ -258,6 +304,7 @@ impl ModuleResolver {
             return_optional: false,
             is_method: false,
             is_async: false,
+            is_native: true,
         });
     }
 

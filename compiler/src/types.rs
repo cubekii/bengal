@@ -55,6 +55,7 @@ impl Type {
         match (self, other) {
             (Type::Null, Type::Optional(_)) => true,
             (Type::Null, Type::Promise(_)) => true,
+            (inner, Type::Optional(target)) => inner.is_assignable_to(target),
             (Type::Optional(inner), other) => inner.is_assignable_to(other),
             (a, b) if a == b => true,
             (Type::Int, Type::Float) => true,
@@ -73,6 +74,7 @@ pub struct FunctionSignature {
     pub return_optional: bool,
     pub is_method: bool,
     pub is_async: bool,
+    pub is_native: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +106,7 @@ pub struct MethodSignature {
     pub return_optional: bool,
     pub private: bool,
     pub is_async: bool,
+    pub is_native: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +136,7 @@ pub struct TypeContext {
     pub current_class: Option<String>,
     pub current_method_return: Option<Type>,
     pub current_async_inner_return: Option<Type>,
+    pub current_method_params: Vec<String>,
     pub imports: Vec<String>,
     pub errors: Vec<TypeError>,
 }
@@ -141,6 +145,9 @@ pub struct TypeContext {
 pub struct TypeError {
     pub message: String,
     pub line: usize,
+    pub column: usize,
+    pub source_file: Option<String>,
+    pub source_line: Option<String>,
 }
 
 impl TypeContext {
@@ -153,6 +160,7 @@ impl TypeContext {
             current_class: None,
             current_method_return: None,
             current_async_inner_return: None,
+            current_method_params: Vec::new(),
             imports: Vec::new(),
             errors: Vec::new(),
         };
@@ -164,36 +172,114 @@ impl TypeContext {
     }
 
     fn register_native_classes(&mut self) {
-        // Register std.io module functions
+        // Register std::io module functions
         let io_print = FunctionSignature {
             name: "print".to_string(),
             params: vec![ParamSignature {
                 name: "text".to_string(),
-                type_name: Some(Type::Str),
+                type_name: Some(Type::Unknown),
             }],
             return_type: None,
             return_optional: false,
             is_method: false,
             is_async: false,
+            is_native: true,
         };
 
         let io_println = FunctionSignature {
             name: "println".to_string(),
             params: vec![ParamSignature {
                 name: "line".to_string(),
-                type_name: Some(Type::Str),
+                type_name: Some(Type::Unknown),
             }],
             return_type: None,
             return_optional: false,
             is_method: false,
             is_async: false,
+            is_native: true,
         };
 
         self.functions.insert("print".to_string(), io_print);
         self.functions.insert("println".to_string(), io_println);
 
-        // Mark std.io as imported by default for native functions
-        self.imports.push("std.io".to_string());
+        // JSON
+        let json_stringify = FunctionSignature {
+            name: "std::json::stringify".to_string(),
+            params: vec![ParamSignature {
+                name: "value".to_string(),
+                type_name: Some(Type::Unknown),
+            }],
+            return_type: Some(Type::Str),
+            return_optional: false,
+            is_method: false,
+            is_async: false,
+            is_native: true,
+        };
+
+        let json_parse = FunctionSignature {
+            name: "std::json::parse".to_string(),
+            params: vec![ParamSignature {
+                name: "json".to_string(),
+                type_name: Some(Type::Str),
+            }],
+            return_type: Some(Type::Unknown),
+            return_optional: false,
+            is_method: false,
+            is_async: false,
+            is_native: true,
+        };
+
+        self.functions.insert("std::json::stringify".to_string(), json_stringify);
+        self.functions.insert("std::json::parse".to_string(), json_parse);
+        self.imports.push("std::json".to_string());
+
+        // Reflection
+        let reflect_typeof = FunctionSignature {
+            name: "std::reflect::type_of".to_string(),
+            params: vec![ParamSignature {
+                name: "value".to_string(),
+                type_name: Some(Type::Unknown),
+            }],
+            return_type: Some(Type::Str),
+            return_optional: false,
+            is_method: false,
+            is_async: false,
+            is_native: true,
+        };
+
+        let reflect_class_name = FunctionSignature {
+            name: "std::reflect::class_name".to_string(),
+            params: vec![ParamSignature {
+                name: "value".to_string(),
+                type_name: Some(Type::Unknown),
+            }],
+            return_type: Some(Type::Str),
+            return_optional: true,
+            is_method: false,
+            is_async: false,
+            is_native: true,
+        };
+
+        let reflect_fields = FunctionSignature {
+            name: "std::reflect::fields".to_string(),
+            params: vec![ParamSignature {
+                name: "value".to_string(),
+                type_name: Some(Type::Unknown),
+            }],
+            return_type: Some(Type::Unknown),
+            return_optional: true,
+            is_method: false,
+            is_async: false,
+            is_native: true,
+        };
+
+        self.functions.insert("std::reflect::type_of".to_string(), reflect_typeof);
+        self.functions.insert("std::reflect::class_name".to_string(), reflect_class_name);
+        self.functions.insert("std::reflect::fields".to_string(), reflect_fields);
+        self.imports.push("std::reflect".to_string());
+
+        // Mark std::io as imported by default for native functions
+        self.imports.push("std::io".to_string());
     }
 
     pub fn add_class(&mut self, class: &ClassDef) {
@@ -219,7 +305,8 @@ impl TypeContext {
                 return_type: method.return_type.as_ref().map(|t| Type::from_str(t)),
                 return_optional: method.return_optional,
                 private: method.private,
-                is_async: false, // Will be updated when parsing async methods
+                is_async: method.is_async,
+                is_native: method.is_native,
             });
         }
 
@@ -293,12 +380,47 @@ impl TypeContext {
         self.functions.get(name)
     }
 
+    /// Try to resolve a function name, including searching for unqualified names
+    /// in qualified functions (e.g., "foo" matches "std::sys::foo")
+    pub fn resolve_function(&self, name: &str) -> Option<&FunctionSignature> {
+        // First try exact match
+        if let Some(sig) = self.functions.get(name) {
+            return Some(sig);
+        }
+
+        // Try to find a function that ends with ::<name>
+        // Prefer exact module match if we're in a module context
+        for (func_name, sig) in &self.functions {
+            if func_name.ends_with(&format!("::{}", name)) {
+                return Some(sig);
+            }
+        }
+
+        None
+    }
+
     pub fn get_method(&self, class_name: &str, method_name: &str) -> Option<&MethodSignature> {
         self.classes.get(class_name).and_then(|c| c.methods.get(method_name))
     }
 
     pub fn add_error(&mut self, message: String, line: usize) {
-        self.errors.push(TypeError { message, line });
+        self.errors.push(TypeError {
+            message,
+            line,
+            column: 0,
+            source_file: None,
+            source_line: None,
+        });
+    }
+
+    pub fn add_error_with_location(&mut self, message: String, line: usize, column: usize, source_file: Option<String>, source_line: Option<String>) {
+        self.errors.push(TypeError {
+            message,
+            line,
+            column,
+            source_file,
+            source_line,
+        });
     }
 
     pub fn has_errors(&self) -> bool {
@@ -325,9 +447,15 @@ impl TypeChecker {
         Self { context }
     }
 
-    pub fn check(&mut self, statements: &[Stmt]) -> Result<&TypeContext, &[TypeError]> {
+    pub fn check(&mut self, statements: &[Stmt]) -> Result<&TypeContext, Vec<TypeError>> {
+        self.check_with_options(statements, false)
+    }
+
+    /// Type check statements, optionally skipping function registration
+    /// (for imported modules where functions are already registered with qualified names)
+    pub fn check_with_options(&mut self, statements: &[Stmt], skip_functions: bool) -> Result<&TypeContext, Vec<TypeError>> {
         // First pass: collect all class and function definitions
-        self.collect_definitions(statements);
+        self.collect_definitions(statements, skip_functions);
 
         // Second pass: type check all statements
         for stmt in statements {
@@ -335,7 +463,7 @@ impl TypeChecker {
         }
 
         if self.context.has_errors() {
-            Err(self.context.get_errors())
+            Err(self.context.errors.clone())
         } else {
             Ok(&self.context)
         }
@@ -349,7 +477,7 @@ impl TypeChecker {
         &mut self.context
     }
 
-    fn collect_definitions(&mut self, statements: &[Stmt]) {
+    fn collect_definitions(&mut self, statements: &[Stmt], skip_functions: bool) {
         for stmt in statements {
             match stmt {
                 Stmt::Class(class) => {
@@ -359,19 +487,22 @@ impl TypeChecker {
                     self.context.add_enum(enum_def);
                 }
                 Stmt::Function(func) => {
-                    let params: Vec<ParamSignature> = func.params.iter().map(|p| ParamSignature {
-                        name: p.name.clone(),
-                        type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
-                    }).collect();
+                    if !skip_functions {
+                        let params: Vec<ParamSignature> = func.params.iter().map(|p| ParamSignature {
+                            name: p.name.clone(),
+                            type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
+                        }).collect();
 
-                    self.context.add_function(&func.name, FunctionSignature {
-                        name: func.name.clone(),
-                        params,
-                        return_type: func.return_type.as_ref().map(|t| Type::from_str(t)),
-                        return_optional: func.return_optional,
-                        is_method: false,
-                        is_async: func.is_async,
-                    });
+                        self.context.add_function(&func.name, FunctionSignature {
+                            name: func.name.clone(),
+                            params,
+                            return_type: func.return_type.as_ref().map(|t| Type::from_str(t)),
+                            return_optional: func.return_optional,
+                            is_method: false,
+                            is_async: func.is_async,
+                            is_native: func.is_native,
+                        });
+                    }
                 }
                 Stmt::Import { path: _ } => {
                     // Import handled during module resolution
@@ -402,9 +533,9 @@ impl TypeChecker {
                 let expr_type = self.infer_expr(expr);
                 self.context.add_variable(name, expr_type);
             }
-            Stmt::Assign { name, expr } => {
+            Stmt::Assign { name, expr, span } => {
                 let expr_type = self.infer_expr(expr);
-                
+
                 if let Some(var_info) = self.context.get_variable(name) {
                     if !expr_type.is_assignable_to(&var_info.type_name) {
                         self.context.add_error(
@@ -417,8 +548,34 @@ impl TypeChecker {
                             0
                         );
                     }
+                } else if let Some(current_class) = &self.context.current_class {
+                    // Check if assigning to a class field without self
+                    if let Some(class_info) = self.context.get_class(current_class) {
+                        if class_info.fields.contains_key(name) {
+                            // Error: assigning to class member without self
+                            self.context.add_error_with_location(
+                                format!(
+                                    "Cannot assign to class member '{}' without 'self' keyword. Use 'self.{}' instead.",
+                                    name, name
+                                ),
+                                span.line,
+                                span.column,
+                                None,
+                                None,
+                            );
+                            return;
+                        }
+                    }
+                    // Inside a class method, implicit variable declarations are not allowed
+                    self.context.add_error_with_location(
+                        format!("Undeclared variable '{}'. Use 'let {} = ...' to declare a local variable", name, name),
+                        span.line,
+                        span.column,
+                        None,
+                        None,
+                    );
                 } else {
-                    // Variable not declared with let, create it
+                    // Variable not declared with let, create it (implicit declaration in global/function scope)
                     self.context.add_variable(name, expr_type);
                 }
             }
@@ -475,6 +632,44 @@ impl TypeChecker {
                         self.check_stmt(stmt);
                     }
                 }
+            }
+            Stmt::For { var_name, range, body } => {
+                let _range_type = self.infer_expr(range);
+                // For now, assume ranges are integers
+                self.context.add_variable(var_name, Type::Int);
+                for stmt in body {
+                    self.check_stmt(stmt);
+                }
+                self.context.variables.remove(var_name);
+            }
+            Stmt::While { condition, body } => {
+                let cond_type = self.infer_expr(condition);
+                if cond_type != Type::Bool && cond_type != Type::Unknown {
+                    self.context.add_error(
+                        format!("Expected bool condition for while, got {}", cond_type.to_str()),
+                        0
+                    );
+                }
+                for stmt in body {
+                    self.check_stmt(stmt);
+                }
+            }
+            Stmt::TryCatch { try_block, catch_var, catch_block } => {
+                for stmt in try_block {
+                    self.check_stmt(stmt);
+                }
+                
+                // Add catch variable (exception object) - currently unknown type
+                self.context.add_variable(catch_var, Type::Unknown);
+                
+                for stmt in catch_block {
+                    self.check_stmt(stmt);
+                }
+                
+                self.context.variables.remove(catch_var);
+            }
+            Stmt::Throw(expr) => {
+                self.infer_expr(expr);
             }
         }
     }
@@ -599,17 +794,52 @@ impl TypeChecker {
                     Literal::Null => Type::Null,
                 }
             }
-            Expr::Variable(name) => {
+            Expr::Variable { name, span } => {
                 if let Some(var_info) = self.context.get_variable(name) {
                     var_info.type_name.clone()
+                } else if let Some(current_class) = &self.context.current_class {
+                    if let Some(class_info) = self.context.get_class(current_class) {
+                        if let Some(field_info) = class_info.fields.get(name) {
+                            // Error: accessing class member without self
+                            let field_type = field_info.type_name.clone();
+                            self.context.add_error_with_location(
+                                format!(
+                                    "Cannot access class member '{}' without 'self' keyword. Use 'self.{}' instead.",
+                                    name, name
+                                ),
+                                span.line,
+                                span.column,
+                                None,
+                                None,
+                            );
+                            return field_type;
+                        }
+                    }
+                    // Variable not found in class context - report as undeclared
+                    self.context.add_error_with_location(
+                        format!("Undeclared variable '{}'", name),
+                        span.line,
+                        span.column,
+                        None,
+                        None,
+                    );
+                    Type::Unknown
                 } else if self.context.get_enum(name).is_some() {
                     // Enum type access
                     Type::Enum(name.clone())
                 } else {
+                    // Variable not found in global/function context - report as undeclared
+                    self.context.add_error_with_location(
+                        format!("Undeclared variable '{}'", name),
+                        span.line,
+                        span.column,
+                        None,
+                        None,
+                    );
                     Type::Unknown
                 }
             }
-            Expr::Binary { left, op, right } => {
+            Expr::Binary { left, op, right, .. } => {
                 let left_type = self.infer_expr(left);
                 let right_type = self.infer_expr(right);
 
@@ -648,6 +878,10 @@ impl TypeChecker {
                     }
                     crate::parser::BinaryOp::Add | crate::parser::BinaryOp::Subtract |
                     crate::parser::BinaryOp::Multiply | crate::parser::BinaryOp::Divide => {
+                        if op == &crate::parser::BinaryOp::Add && (left_type == Type::Str || right_type == Type::Str) {
+                            return Type::Str;
+                        }
+
                         // Arithmetic operations require numeric types
                         if !is_numeric_type(&left_type) && left_type != Type::Unknown {
                             self.context.add_error(
@@ -668,9 +902,25 @@ impl TypeChecker {
                             Type::Int
                         }
                     }
+                    crate::parser::BinaryOp::Greater | crate::parser::BinaryOp::Less => {
+                        // Comparison operations require numeric types and return bool
+                        if !is_numeric_type(&left_type) && left_type != Type::Unknown {
+                            self.context.add_error(
+                                format!("Expected numeric type for comparison, got {}", left_type.to_str()),
+                                0
+                            );
+                        }
+                        if !is_numeric_type(&right_type) && right_type != Type::Unknown {
+                            self.context.add_error(
+                                format!("Expected numeric type for comparison, got {}", right_type.to_str()),
+                                0
+                            );
+                        }
+                        Type::Bool
+                    }
                 }
             }
-            Expr::Unary { op, expr } => {
+            Expr::Unary { op, expr, .. } => {
                 let inner_type = self.infer_expr(expr);
                 match op {
                     crate::parser::UnaryOp::Not => {
@@ -684,8 +934,8 @@ impl TypeChecker {
                     }
                 }
             }
-            Expr::Call { callee, args } => {
-                if let Expr::Variable(func_name) = callee.as_ref() {
+            Expr::Call { callee, args, .. } => {
+                if let Expr::Variable { name: func_name, .. } = callee.as_ref() {
                     // Check if it's a function call
                     let func_sig = self.context.get_function(func_name).cloned();
                     if let Some(ref sig) = func_sig {
@@ -703,7 +953,7 @@ impl TypeChecker {
                     } else {
                         Type::Unknown
                     }
-                } else if let Expr::Get { object, name } = callee.as_ref() {
+                } else if let Expr::Get { object, name, .. } = callee.as_ref() {
                     // Method call
                     let object_type = self.infer_expr(object);
 
@@ -712,6 +962,22 @@ impl TypeChecker {
                             .and_then(|c| c.methods.get(name).cloned());
 
                         if let Some(ref sig) = method_sig {
+                            // Check visibility
+                            let mut visibility_error = None;
+                            if sig.private {
+                                if let Some(current) = &self.context.current_class {
+                                    if current != &class_name {
+                                        visibility_error = Some(format!("Method '{}' on class '{}' is private and cannot be called from class '{}'", name, class_name, current));
+                                    }
+                                } else {
+                                    visibility_error = Some(format!("Method '{}' on class '{}' is private and cannot be called from global scope", name, class_name));
+                                }
+                            }
+
+                            if let Some(err) = visibility_error {
+                                self.context.add_error(err, 0);
+                            }
+
                             self.check_method_call(sig, args, name, &class_name);
                             let mut return_type = sig.return_type.clone().unwrap_or(Type::Unknown);
                             // If calling an async method, return type is Promise<T>
@@ -737,13 +1003,31 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
-            Expr::Get { object, name } => {
+            Expr::Get { object, name, .. } => {
                 let object_type = self.infer_expr(object);
 
                 if let Type::Class(class_name) = object_type {
                     if let Some(class_info) = self.context.get_class(&class_name) {
                         if let Some(field_info) = class_info.fields.get(name) {
-                            field_info.type_name.clone()
+                            // Check visibility
+                            let mut visibility_error = None;
+                            if field_info.private {
+                                if let Some(current) = &self.context.current_class {
+                                    if current != &class_name {
+                                        visibility_error = Some(format!("Field '{}' on class '{}' is private and cannot be accessed from class '{}'", name, class_name, current));
+                                    }
+                                } else {
+                                    visibility_error = Some(format!("Field '{}' on class '{}' is private and cannot be accessed from global scope", name, class_name));
+                                }
+                            }
+
+                            let type_name = field_info.type_name.clone();
+
+                            if let Some(err) = visibility_error {
+                                self.context.add_error(err, 0);
+                            }
+
+                            type_name
                         } else {
                             self.context.add_error(
                                 format!("Field '{}' not found on class '{}'", name, class_name),
@@ -773,31 +1057,53 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
-            Expr::Set { object, name, value } => {
+            Expr::Set { object, name, value, span } => {
                 let object_type = self.infer_expr(object);
                 let value_type = self.infer_expr(value);
 
                 if let Type::Class(class_name) = object_type {
                     let field_info = self.context.get_class(&class_name)
                         .and_then(|c| c.fields.get(name).cloned());
-                    
+
                     if let Some(ref field) = field_info {
+                        // Check visibility
+                        let mut visibility_error = None;
+                        if field.private {
+                            if let Some(current) = &self.context.current_class {
+                                if current != &class_name {
+                                    visibility_error = Some(format!("Field '{}' on class '{}' is private and cannot be modified from class '{}'", name, class_name, current));
+                                }
+                            } else {
+                                visibility_error = Some(format!("Field '{}' on class '{}' is private and cannot be modified from global scope", name, class_name));
+                            }
+                        }
+
+                        if let Some(err) = visibility_error {
+                            self.context.add_error_with_location(err, span.line, span.column, None, None);
+                        }
+
                         if !value_type.is_assignable_to(&field.type_name) {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!(
                                     "Cannot assign {} to field '{}' of type {}",
                                     value_type.to_str(),
                                     name,
                                     field.type_name.to_str()
                                 ),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         field.type_name.clone()
                     } else {
-                        self.context.add_error(
+                        self.context.add_error_with_location(
                             format!("Field '{}' not found on class '{}'", name, class_name),
-                            0
+                            span.line,
+                            span.column,
+                            None,
+                            None,
                         );
                         Type::Unknown
                     }
@@ -805,7 +1111,7 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
-            Expr::Interpolated { parts } => {
+            Expr::Interpolated { parts, .. } => {
                 for part in parts {
                     if let crate::parser::InterpPart::Expr(e) = part {
                         self.infer_expr(e);
@@ -813,7 +1119,18 @@ impl TypeChecker {
                 }
                 Type::Str
             }
-            Expr::Await { expr } => {
+            Expr::Range { start, end, .. } => {
+                let start_type = self.infer_expr(start);
+                let end_type = self.infer_expr(end);
+                if start_type != Type::Int && start_type != Type::Unknown {
+                    self.context.add_error(format!("Range start must be an integer, got {}", start_type.to_str()), 0);
+                }
+                if end_type != Type::Int && end_type != Type::Unknown {
+                    self.context.add_error(format!("Range end must be an integer, got {}", end_type.to_str()), 0);
+                }
+                Type::Int
+            }
+            Expr::Await { expr, .. } => {
                 let inner_type = self.infer_expr(expr);
                 // Await unwraps Promise<T> to T
                 match inner_type {

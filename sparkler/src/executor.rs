@@ -1,12 +1,14 @@
-use crate::vm::{VM, Value, PromiseState};
+use crate::vm::{VM, Value, PromiseState, NativeFn, Class, Function};
 
 pub struct Bytecode {
     pub data: Vec<u8>,
     pub strings: Vec<String>,
+    pub classes: Vec<Class>,
+    pub functions: Vec<Function>,
 }
 
 pub struct Executor {
-    vm: VM,
+    pub vm: VM,
 }
 
 impl Executor {
@@ -16,17 +18,31 @@ impl Executor {
         }
     }
 
-    pub async fn run(&mut self, bytecode: Bytecode) -> Result<Option<Value>, String> {
-        self.vm.load(&bytecode.data, bytecode.strings)?;
-        self.vm.run().await
+    pub fn register_native(&mut self, name: &str, f: NativeFn) {
+        self.vm.register_native(name, f);
     }
 
-    pub async fn run_to_completion(&mut self, bytecode: Bytecode) -> Result<Option<Value>, String> {
-        self.vm.load(&bytecode.data, bytecode.strings)?;
-        
+    pub fn register_fallback(&mut self, f: NativeFn) {
+        self.vm.register_fallback(f);
+    }
+
+    pub async fn run(&mut self, bytecode: Bytecode, source_file: Option<&str>) -> Result<Option<Value>, String> {
+        if let Some(file) = source_file {
+            self.vm.set_source_file(file);
+        }
+        self.vm.load(&bytecode.data, bytecode.strings, bytecode.classes, bytecode.functions)?;
+        self.vm.run().await.map_err(|e| e.to_string())
+    }
+
+    pub async fn run_to_completion(&mut self, bytecode: Bytecode, source_file: Option<&str>) -> Result<Option<Value>, String> {
+        if let Some(file) = source_file {
+            self.vm.set_source_file(file);
+        }
+        self.vm.load(&bytecode.data, bytecode.strings, bytecode.classes, bytecode.functions)?;
+
         loop {
-            let result = self.vm.run().await?;
-            
+            let result = self.vm.run().await.map_err(|e| e.to_string())?;
+
             match result {
                 Some(Value::Promise(promise)) => {
                     let state = promise.lock().await;
