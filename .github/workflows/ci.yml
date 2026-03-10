@@ -37,6 +37,11 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      - name: install requirements
+        run: |
+          sudo apt update
+          sudo apt install -y 
+
       - name: build compiler
         run: cargo build --release
 
