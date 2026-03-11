@@ -314,13 +314,17 @@ impl Parser {
         // This allows async to be used for lambdas in expressions
         while self.check(&Token::Native) || self.check(&Token::Async) {
             let is_current_async = self.match_token(&Token::Async);
-            let is_current_native = self.match_token(&Token::Native);
-            
+            let is_current_native = if !is_current_async { self.match_token(&Token::Native) } else { false };
+
             if is_current_async {
-                // Check if followed by fn
+                // Check if followed by fn (possibly with native in between: async native fn)
                 self.skip_newlines();
                 if self.check(&Token::Fn) {
                     is_async = true;
+                } else if self.check(&Token::Native) {
+                    // async native fn pattern
+                    is_async = true;
+                    // Continue loop to consume native on next iteration
                 } else {
                     // Not followed by fn, put async back by not consuming it
                     self.pos -= 1; // Go back to async token
@@ -1078,16 +1082,7 @@ impl Parser {
             return self.error("Expected '}' to close if body");
         }
 
-        let else_branch = if self.match_token(&Token::Else) {
-            if !self.match_token(&Token::LBrace) {
-                return self.error("Expected '{' for else body");
-            }
-            Some(self.parse_block()?)
-        } else {
-            None
-        };
-
-        Ok(Stmt::If { condition, then_branch, else_branch })
+        Ok(Stmt::If { condition, then_branch, else_branch: None })
     }
 
     fn parse_for(&mut self) -> Result<Stmt, String> {
@@ -1214,12 +1209,62 @@ impl Parser {
 
         while !self.check(&Token::RBrace) && !self.check(&Token::Eof) {
             if let Some(stmt) = self.parse_statement()? {
+                // Check if this is an if statement that might need an else branch
+                let stmt = self.maybe_parse_else_if(stmt)?;
                 block.push(stmt);
             }
             self.skip_newlines();
         }
 
         Ok(block)
+    }
+
+    fn maybe_parse_else_if(&mut self, stmt: Stmt) -> Result<Stmt, String> {
+        // If the statement is an If, check for else/else if
+        if let Stmt::If { condition, then_branch, else_branch } = stmt {
+            self.skip_newlines();
+            
+            if self.match_token(&Token::Else) {
+                self.skip_newlines();
+                
+                // Check for 'else if'
+                if self.match_token(&Token::If) {
+                    // Parse the nested if statement
+                    let nested_if = self.parse_if()?;
+                    // Recursively check for more else/else if on the nested if
+                    let nested_if = self.maybe_parse_else_if(nested_if)?;
+                    // Return the original if with the nested if as its else branch
+                    return Ok(Stmt::If {
+                        condition,
+                        then_branch,
+                        else_branch: Some(vec![nested_if]),
+                    });
+                } else {
+                    // Regular else block
+                    if !self.match_token(&Token::LBrace) {
+                        return Err(format!("Expected '{{' for else body"));
+                    }
+                    let else_block = self.parse_block()?;
+                    if !self.match_token(&Token::RBrace) {
+                        return Err(format!("Expected '}}' to close else body"));
+                    }
+                    return Ok(Stmt::If {
+                        condition,
+                        then_branch,
+                        else_branch: Some(else_block),
+                    });
+                }
+            }
+            
+            // No else, return the if as-is
+            return Ok(Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            });
+        }
+        
+        Ok(stmt)
     }
 
     fn parse_expression(&mut self) -> Result<Expr, String> {
