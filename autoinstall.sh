@@ -35,7 +35,15 @@ echo -e "\033[0;32mWelcome to bengal installation script\033[0m"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-if echo "$DISTRO_ID $DISTRO_LIKE" | grep -qiE "debian|ubuntu"; then
+if [ "$OS" = "Darwin" ]; then
+    echo "Detected macOS, installing .tar.gz package..."
+    curl -sSL -o "$TMPDIR/bengal.tar.gz" "https://github.com/${REPO}/releases/download/${LATEST}/bengal_${LATEST#v}_macos_${ARCH}.tar.gz"
+    tar -xzf "$TMPDIR/bengal.tar.gz" -C "$TMPDIR"
+    sudo cp "$TMPDIR/bin/bengal" /usr/local/bin/bengal
+    sudo chmod 755 /usr/local/bin/bengal
+    echo "Bengal installed successfully!"
+    exit 0
+elif echo "$DISTRO_ID $DISTRO_LIKE" | grep -qiE "debian|ubuntu"; then
     echo "Detected Debian-based distro, installing .deb package..."
     curl -sSL -o "$TMPDIR/bengal.deb" "https://github.com/${REPO}/releases/download/${LATEST}/bengal_${LATEST#v}_${ARCH}.deb"
     sudo apt-get install -y "$TMPDIR/bengal.deb"
@@ -56,7 +64,7 @@ elif echo "$DISTRO_ID $DISTRO_LIKE" | grep -qiE "arch|manjaro|endeavour"; then
     echo "Bengal installed successfully!"
     exit 0
 else
-    echo "Unsupported distro: $DISTRO_ID" >&2
+    echo "Unsupported OS/distro: $OS / $DISTRO_ID" >&2
     echo "Please download manually from https://github.com/${REPO}/releases" >&2
     exit 1
 fi
