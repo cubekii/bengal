@@ -10,7 +10,7 @@ if [ -f /etc/os-release ]; then
     DISTRO_LIKE="${ID_LIKE:-}"
 fi
 
-REPO="cubekii/bengal"
+REPO="Nelonn/bengal"
 LATEST=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
     | grep '"tag_name"' \
     | sed 's/.*"tag_name": *"\(.*\)".*/\1/')
