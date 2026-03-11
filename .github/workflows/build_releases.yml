@@ -267,6 +267,7 @@ jobs:
       - name: Install cross-compilation tools
         run: |
           dnf install -y \
+            gcc \
             gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu \
             openssl-devel
