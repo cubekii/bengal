@@ -267,7 +267,6 @@ jobs:
         with:
           files: rpm-package/bengal_*.rpm
 
-
   build-rpm-arm64:
     name: Build RPM Package (arm64)
     runs-on: ubuntu-latest
@@ -278,28 +277,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          target: aarch64-unknown-linux-gnu
-
-      - name: Install cross-compilation tools
-        # Notes on packages:
-        # - gcc-aarch64-linux-gnu: cross-compiler and its bundled aarch64 headers
-        #   (provides stdint.h etc. under /usr/aarch64-linux-gnu/sys-root)
-        # - binutils-aarch64-linux-gnu: cross-linker/assembler tools
-        # - glibc-devel: needed by openssl vendored build for host-side headers
-        # - perl/perl-FindBin/perl-IPC-Cmd: required by OpenSSL's own build system
-        # - pkgconf: package configuration utility
-        run: |
-          dnf install -y \
-          gcc-aarch64-linux-gnu \
-          binutils-aarch64-linux-gnu \
-          make \
-          perl \
-          perl-FindBin \
-          perl-IPC-Cmd \
-          pkgconf \
-          pkgconfig \
-          rpm-build \
-          fakeroot
+          targets: aarch64-unknown-linux-gnu
 
       - name: Cache Cargo registry
         uses: actions/cache@v4
@@ -310,34 +288,32 @@ jobs:
             target
           key: fedora-cargo-arm64-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build release binary (arm64)
+      - name: Install build dependencies
         run: |
-          export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-          export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
-          export CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++
-          export AR_aarch64_unknown_linux_gnu=aarch64-linux-gnu-ar
-          
-          export OPENSSL_VENDORED=1
-          export OPENSSL_STATIC=1
-          export PKG_CONFIG_ALLOW_CROSS=1
-          
-          cargo build --release --bin bengal --target aarch64-unknown-linux-gnu
-          
-          mkdir -p target/release-arm64
-          cp target/aarch64-unknown-linux-gnu/release/bengal target/release-arm64/bengal
+          dnf install -y rpm-build fakeroot gcc clang make pkgconfig openssl openssl-devel \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            openssl-devel.aarch64
 
+      - name: Build release binary
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          PKG_CONFIG_ALLOW_CROSS: "1"
+          PKG_CONFIG_PATH_aarch64_unknown_linux_gnu: /usr/lib64/aarch64-linux-gnu/pkgconfig
+          OPENSSL_INCLUDE_DIR: /usr/include/openssl
+          OPENSSL_LIB_DIR: /usr/lib64/aarch64-linux-gnu
+        run: cargo build --release --bin bengal --target aarch64-unknown-linux-gnu
 
       - name: Create RPM package structure
         run: |
           VERSION=${GITHUB_REF#refs/tags/}
           mkdir -p rpm-package/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           mkdir -p rpm-package/SOURCES/bengal-${VERSION#v}
-          
-          cp target/release-arm64/bengal rpm-package/SOURCES/bengal-${VERSION#v}/
+
+          cp target/aarch64-unknown-linux-gnu/release/bengal rpm-package/SOURCES/bengal-${VERSION#v}/
           chmod 755 rpm-package/SOURCES/bengal-${VERSION#v}/bengal
-          
+
           tar -czf rpm-package/SOURCES/bengal-${VERSION#v}.tar.gz -C rpm-package/SOURCES/ bengal-${VERSION#v}
-          
+
           cat > rpm-package/SPECS/bengal.spec << EOF
           Name:           bengal
           Version:        ${VERSION#v}
@@ -345,20 +321,19 @@ jobs:
           Summary:        Bengal language CLI
           License:        MIT
           URL:            https://github.com/${{ github.repository }}
-          Arch:           aarch64
           Requires:       openssl-libs
-          
+
           %description
           Bengal programming language command-line interface
-          
+
           %install
           mkdir -p %{buildroot}/usr/bin
           cp %{_sourcedir}/bengal-${VERSION#v}/bengal %{buildroot}/usr/bin/
           chmod 755 %{buildroot}/usr/bin/bengal
-          
+
           %files
           /usr/bin/bengal
-          
+
           %preun
           if [ \$1 -eq 0 ]; then
             rm -f /usr/bin/bengal
@@ -371,8 +346,8 @@ jobs:
           rpmbuild -bb rpm-package/SPECS/bengal.spec \
             --define "_topdir $(pwd)/rpm-package" \
             --define "_rpmdir $(pwd)/rpm-package/RPMS" \
-            --define "_host_cpu aarch64"
-            
+            --target aarch64
+
           find rpm-package/RPMS -name "*.rpm" -exec cp {} rpm-package/bengal_${VERSION#v}_arm64.rpm \;
 
       - name: Upload RPM artifact
@@ -385,7 +360,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: rpm-package/bengal_*.rpm
-
   # ========== ARCH LINUX (.tar.gz) ==========
   build-arch-amd64:
     name: Build Arch Linux Package (amd64)
