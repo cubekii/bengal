@@ -1,0 +1,244 @@
+# Build Bengal CLI for Linux distributions on release
+# Creates packages for:
+# - Debian/Ubuntu (.deb)
+# - Fedora/RHEL (.rpm)
+# - Arch Linux (.tar.gz)
+
+name: Linux Release Builds
+
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: bengal
+
+jobs:
+  build-deb:
+    name: Build Debian Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install packaging tools
+        run: |
+          sudo apt update
+          sudo apt install -y fakeroot dpkg-dev
+
+      - name: Build release binary
+        run: cargo build --release --bin bengal
+
+      - name: Create DEB package structure
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          mkdir -p debian-package/DEBIAN
+          mkdir -p debian-package/usr/bin
+          mkdir -p debian-package/usr/share/doc/bengal
+          
+          cp target/release/bengal debian-package/usr/bin/
+          chmod 755 debian-package/usr/bin/bengal
+          
+          cat > debian-package/DEBIAN/control << EOF
+          Package: bengal
+          Version: ${VERSION#v}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Bengal Language Team
+          Description: Bengal language CLI
+           Bengal programming language command-line interface
+          EOF
+          
+          cp README.md debian-package/usr/share/doc/bengal/
+
+      - name: Build DEB package
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          fakeroot dpkg-deb --build debian-package bengal_${VERSION#v}_amd64.deb
+
+      - name: Upload DEB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bengal-deb
+          path: bengal_*.deb
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bengal_*.deb
+
+  build-rpm:
+    name: Build RPM Package
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: fedora-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install RPM build tools
+        run: |
+          dnf install -y rpm-build fakeroot
+
+      - name: Build release binary
+        run: cargo build --release --bin bengal
+
+      - name: Create RPM package structure
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          mkdir -p rpm-package/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          mkdir -p rpm-package/SOURCES/bengal-${VERSION#v}
+          
+          cp target/release/bengal rpm-package/SOURCES/bengal-${VERSION#v}/
+          chmod 755 rpm-package/SOURCES/bengal-${VERSION#v}/bengal
+          
+          tar -czf rpm-package/SOURCES/bengal-${VERSION#v}.tar.gz -C rpm-package/SOURCES/ bengal-${VERSION#v}
+          
+          cat > rpm-package/SPECS/bengal.spec << EOF
+          Name:           bengal
+          Version:        ${VERSION#v}
+          Release:        1%{?dist}
+          Summary:        Bengal language CLI
+          License:        MIT
+          URL:            https://github.com/${{ github.repository }}
+          
+          %description
+          Bengal programming language command-line interface
+          
+          %install
+          mkdir -p %{buildroot}/usr/bin
+          cp %{_sourcedir}/bengal-${VERSION#v}/bengal %{buildroot}/usr/bin/
+          chmod 755 %{buildroot}/usr/bin/bengal
+          
+          %files
+          /usr/bin/bengal
+          
+          %preun
+          if [ \$1 -eq 0 ]; then
+            rm -f /usr/bin/bengal
+          fi
+          EOF
+
+      - name: Build RPM package
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          rpmbuild -bb rpm-package/SPECS/bengal.spec \
+            --define "_topdir $(pwd)/rpm-package" \
+            --define "_rpmdir $(pwd)/rpm-package/RPMS"
+          
+          find rpm-package/RPMS -name "*.rpm" -exec cp {} rpm-package/ \;
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bengal-rpm
+          path: rpm-package/*.rpm
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: rpm-package/*.rpm
+
+  build-arch:
+    name: Build Arch Linux Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build release binary
+        run: cargo build --release --bin bengal
+
+      - name: Create Arch package structure
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          mkdir -p arch-package/usr/bin
+          mkdir -p arch-package/usr/share/doc/bengal
+          
+          cp target/release/bengal arch-package/usr/bin/
+          chmod 755 arch-package/usr/bin/bengal
+          cp README.md arch-package/usr/share/doc/bengal/
+          
+          tar -czf bengal-${VERSION#v}-x86_64.tar.gz -C arch-package usr
+
+      - name: Create PKGBUILD
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          cat > PKGBUILD << EOF
+          pkgname=bengal
+          pkgver=${VERSION#v}
+          pkgrel=1
+          pkgdesc="Bengal language CLI"
+          arch=('x86_64')
+          url="https://github.com/${{ github.repository }}"
+          license=('MIT')
+          provides=('bengal')
+          
+          package() {
+            cd "\${srcdir}"
+            install -Dm755 bengal "\${pkgdir}/usr/bin/bengal"
+            install -Dm644 README.md "\${pkgdir}/usr/share/doc/bengal/README.md"
+          }
+          EOF
+
+      - name: Create .SRCINFO
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          cat > .SRCINFO << EOF
+          pkgbase = bengal
+          pkgver = ${VERSION#v}
+          pkgrel = 1
+          pkgdesc = Bengal language CLI
+          url = https://github.com/${{ github.repository }}
+          arch = x86_64
+          license = MIT
+          provides = bengal
+          EOF
+
+      - name: Upload Arch artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bengal-arch
+          path: |
+            bengal-*.tar.gz
+            PKGBUILD
+            .SRCINFO
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bengal-*.tar.gz
