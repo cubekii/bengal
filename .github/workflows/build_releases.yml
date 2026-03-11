@@ -286,6 +286,7 @@ jobs:
         # - binutils-aarch64-linux-gnu: cross-linker/assembler tools
         # - glibc-devel: needed by openssl vendored build for host-side headers
         # - perl/perl-FindBin/perl-IPC-Cmd: required by OpenSSL's own build system
+        # - pkgconf: package configuration utility
         run: |
           dnf install -y \
             gcc-aarch64-linux-gnu \
@@ -297,7 +298,9 @@ jobs:
             make \
             rpm-build \
             fakeroot \
+            pkgconf \
             pkgconfig \
+            pkgconf \
             openssl \
             openssl-devel
 
