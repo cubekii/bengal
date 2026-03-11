@@ -291,8 +291,8 @@ jobs:
       - name: Install build dependencies
         run: |
           dnf install -y rpm-build fakeroot gcc clang make pkgconfig openssl openssl-devel \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-            openssl-devel.aarch64
+          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+          openssl-devel-crosscompile
 
       - name: Build release binary
         env:
