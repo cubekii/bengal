@@ -193,7 +193,7 @@ jobs:
           chmod 755 arch-package/usr/bin/bengal
           cp README.md arch-package/usr/share/doc/bengal/
           
-          tar -czf bengal-${VERSION#v}-amd64.tar.gz -C arch-package usr
+          tar -czf bengal_${VERSION#v}_amd64.tar.gz -C arch-package usr
 
       - name: Create PKGBUILD
         run: |
