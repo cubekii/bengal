@@ -59,11 +59,17 @@ pub fn register_all(vm: &mut VM) {
         .function("get", http::native_http_get)
         .function("post", http::native_http_post)
         .class("HttpClient")
-            .method("set_timeout", http::native_http_client_set_timeout)
-            .method("set_base_url", http::native_http_client_set_base_url)
-            .method("add_header", http::native_http_client_add_header)
-            .method("get", http::native_http_client_get)
-            .method("post", http::native_http_client_post)
+            .native_create(http::native_http_client_native_create)
+            .method("constructor()", http::native_http_client_constructor)
+            .method("setTimeout(T)", http::native_http_client_set_timeout)
+            .method("setBaseUrl(T)", http::native_http_client_set_base_url)
+            .method("setRedirectPolicy(T)", http::native_http_client_set_redirect_policy)
+            .method("setMaxRedirects(T)", http::native_http_client_set_max_redirects)
+            .method("setProxy(T,T)", http::native_http_client_set_proxy)
+            .method("setVerifySsl(T)", http::native_http_client_set_verify_ssl)
+            .method("addHeader(T,T)", http::native_http_client_add_header)
+            .method("get(T)", http::native_http_client_get)
+            .method("post(T,T)", http::native_http_client_post)
             .register_class()
         .register(vm);
 
@@ -158,7 +164,6 @@ pub fn register_all(vm: &mut VM) {
         .function("get", args::native_args_get)
         .register(vm);
 
-    // Register math constants and functions
     NativeModule::new("std.math")
         .function("sin", math::native_math_sin)
         .function("cos", math::native_math_cos)
@@ -208,7 +213,6 @@ pub fn register_all(vm: &mut VM) {
         .function("assertSame", test::native_assert_same)
         .register(vm);
 
-    // Fallback function that throws an error
     vm.register_fallback(|_args| {
         Err(Value::String(
             "Native method not available or disabled by runtime".to_string(),

@@ -2259,7 +2259,7 @@ impl TypeChecker {
 
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Module { path: _ } => {
+            Stmt::Module { path: _, .. } => {
                 // Module declaration - just for namespacing
             }
             Stmt::Import { .. } => {
@@ -2280,7 +2280,7 @@ impl TypeChecker {
             Stmt::Function(func) => {
                 self.check_function(func);
             }
-            Stmt::Let { name, type_annotation, expr, private } => {
+            Stmt::Let { name, type_annotation, expr, private, .. } => {
                 // If there's a type annotation, use it for type deduction
                 let expr_type = if let Some(ref type_name) = type_annotation {
                     let expected_type = Type::from_str(type_name);
@@ -2398,12 +2398,18 @@ impl TypeChecker {
 
                 let expr_type = self.infer_expr(expr);
 
-                // For +=, -=, *=, /=, both operands must be numeric types
+                // For +=, -=, *=, /=, %=, &=, |=, ^=, <<=, >>=, both operands must be numeric types
                 let op_name = match op {
                     crate::parser::AugOp::Add => "+=",
                     crate::parser::AugOp::Subtract => "-=",
                     crate::parser::AugOp::Multiply => "*=",
                     crate::parser::AugOp::Divide => "/=",
+                    crate::parser::AugOp::Modulo => "%=",
+                    crate::parser::AugOp::BitAnd => "&=",
+                    crate::parser::AugOp::BitOr => "|=",
+                    crate::parser::AugOp::BitXor => "^=",
+                    crate::parser::AugOp::ShiftLeft => "<<=",
+                    crate::parser::AugOp::ShiftRight => ">>=",
                 };
 
                 if !var_type.is_numeric() {
@@ -2426,7 +2432,7 @@ impl TypeChecker {
                     );
                 }
             }
-            Stmt::Return(expr) => {
+            Stmt::Return { expr, .. } => {
                 // For async functions, check against the inner return type
                 let expected_return = if self.context.current_async_inner_return.is_some() {
                     self.context.current_async_inner_return.clone()
@@ -2462,7 +2468,7 @@ impl TypeChecker {
             Stmt::Expr(expr) => {
                 self.infer_expr(expr);
             }
-            Stmt::If { condition, then_branch, else_branch } => {
+            Stmt::If { condition, then_branch, else_branch, .. } => {
                 let cond_type = self.infer_expr(condition);
                 if cond_type != Type::Bool && cond_type != Type::Unknown {
                     self.context.add_error(
@@ -2470,18 +2476,18 @@ impl TypeChecker {
                         0
                     );
                 }
-                
+
                 for stmt in then_branch {
                     self.check_stmt(stmt);
                 }
-                
+
                 if let Some(else_b) = else_branch {
                     for stmt in else_b {
                         self.check_stmt(stmt);
                     }
                 }
             }
-            Stmt::For { var_name, range, body } => {
+            Stmt::For { var_name, range, body, .. } => {
                 let _range_type = self.infer_expr(range);
                 // For now, assume ranges are integers
                 self.context.add_variable(var_name, Type::Int, false);
@@ -2490,7 +2496,7 @@ impl TypeChecker {
                 }
                 self.context.variables.remove(var_name);
             }
-            Stmt::While { condition, body } => {
+            Stmt::While { condition, body, .. } => {
                 let cond_type = self.infer_expr(condition);
                 if cond_type != Type::Bool && cond_type != Type::Unknown {
                     self.context.add_error(
@@ -2502,27 +2508,27 @@ impl TypeChecker {
                     self.check_stmt(stmt);
                 }
             }
-            Stmt::TryCatch { try_block, catch_var, catch_block } => {
+            Stmt::TryCatch { try_block, catch_var, catch_block, .. } => {
                 for stmt in try_block {
                     self.check_stmt(stmt);
                 }
-                
+
                 // Add catch variable (exception object) - currently unknown type
                 self.context.add_variable(catch_var, Type::Unknown, false);
-                
+
                 for stmt in catch_block {
                     self.check_stmt(stmt);
                 }
-                
+
                 self.context.variables.remove(catch_var);
             }
-            Stmt::Throw(expr) => {
+            Stmt::Throw { expr, .. } => {
                 self.infer_expr(expr);
             }
-            Stmt::Break => {
+            Stmt::Break(_) => {
                 // Break statement - no type checking needed
             }
-            Stmt::Continue => {
+            Stmt::Continue(_) => {
                 // Continue statement - no type checking needed
             }
         }
@@ -3364,6 +3370,14 @@ impl TypeChecker {
                             }
 
                             let type_name = field_info.type_name.clone();
+
+                            // Static fields must be accessed through the class name, not an instance
+                            if field_info.is_static {
+                                self.context.add_error_with_location(
+                                    format!("Static field '{}' on class '{}' must be accessed through the class name, not an instance. Use '{}.{}' instead.", name, class_name, class_name, name),
+                                    span.line, span.column, None, None
+                                );
+                            }
 
                             if let Some(err) = visibility_error {
                                 self.context.add_error_with_location(err, span.line, span.column, None, None);

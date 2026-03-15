@@ -64,6 +64,11 @@ pub enum Token {
     BitNot,
     ShiftLeft,
     ShiftRight,
+    ShiftLeftEqual,
+    ShiftRightEqual,
+    BitAndEqual,
+    BitOrEqual,
+    BitXorEqual,
 
     Plus,
     PlusPlus,
@@ -77,6 +82,7 @@ pub enum Token {
     Slash,
     SlashEqual,
     Percent,
+    PercentEqual,
 
     Greater,
     GreaterEqual,
@@ -230,15 +236,6 @@ impl Lexer {
             }
             ',' => { self.advance(); Ok(Token::Comma) }
             ';' => { self.advance(); Ok(Token::Semicolon) }
-            '.' => {
-                self.advance();
-                if self.peek() == Some('.') {
-                    self.advance();
-                    Ok(Token::Range)
-                } else {
-                    Ok(Token::Dot)
-                }
-            }
             '$' => { self.advance(); Ok(Token::Dollar) }
             '=' => {
                 self.advance();
@@ -307,12 +304,23 @@ impl Lexer {
                     Ok(Token::Slash)
                 }
             }
-            '%' => { self.advance(); Ok(Token::Percent) }
+            '%' => {
+                self.advance();
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::PercentEqual)
+                } else {
+                    Ok(Token::Percent)
+                }
+            }
             '&' => {
                 self.advance();
                 if self.peek() == Some('&') {
                     self.advance();
                     Ok(Token::DoubleAnd)
+                } else if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::BitAndEqual)
                 } else {
                     Ok(Token::BitAnd)
                 }
@@ -322,13 +330,21 @@ impl Lexer {
                 if self.peek() == Some('|') {
                     self.advance();
                     Ok(Token::DoubleOr)
+                } else if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::BitOrEqual)
                 } else {
                     Ok(Token::BitOr)
                 }
             }
             '^' => {
                 self.advance();
-                Ok(Token::BitXor)
+                if self.peek() == Some('=') {
+                    self.advance();
+                    Ok(Token::BitXorEqual)
+                } else {
+                    Ok(Token::BitXor)
+                }
             }
             '~' => {
                 self.advance();
@@ -338,7 +354,12 @@ impl Lexer {
                 self.advance();
                 if self.peek() == Some('<') {
                     self.advance();
-                    Ok(Token::ShiftLeft)
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Ok(Token::ShiftLeftEqual)
+                    } else {
+                        Ok(Token::ShiftLeft)
+                    }
                 } else if self.peek() == Some('=') {
                     self.advance();
                     Ok(Token::LessEqual)
@@ -353,7 +374,12 @@ impl Lexer {
                 self.advance();
                 if self.peek() == Some('>') {
                     self.advance();
-                    Ok(Token::ShiftRight)
+                    if self.peek() == Some('=') {
+                        self.advance();
+                        Ok(Token::ShiftRightEqual)
+                    } else {
+                        Ok(Token::ShiftRight)
+                    }
                 } else if self.peek() == Some('=') {
                     self.advance();
                     Ok(Token::GreaterEqual)
@@ -364,6 +390,20 @@ impl Lexer {
             '"' => self.read_string(),
             c if c.is_alphabetic() || c == '_' => self.read_identifier(),
             c if c.is_ascii_digit() => self.read_number(),
+            '.' => {
+                // Check if this is a float starting with a dot (e.g., .05)
+                if self.peek_next().map_or(false, |c| c.is_ascii_digit()) {
+                    self.read_number_starting_with_dot()
+                } else {
+                    self.advance();
+                    if self.peek() == Some('.') {
+                        self.advance();
+                        Ok(Token::Range)
+                    } else {
+                        Ok(Token::Dot)
+                    }
+                }
+            }
             _ => Err(self.error(&format!("Unexpected character: '{}'", ch))),
         }
     }
@@ -391,6 +431,16 @@ impl Lexer {
                     Some('t') => s.push('\t'),
                     Some('\\') => s.push('\\'),
                     Some('"') => s.push('"'),
+                    Some('s') => s.push(' '),      // \s = space
+                    Some('b') => s.push('\x08'),  // \b = backspace
+                    Some('0') => s.push('\0'),    // \0 = null byte
+                    Some('a') => s.push('\x07'),  // \a = bell/alert
+                    Some('f') => s.push('\x0C'),  // \f = form feed
+                    Some('v') => s.push('\x0B'),  // \v = vertical tab
+                    Some('$') => {
+                        s.push('\x00');  // Use null byte as marker for escaped dollar
+                        s.push('$');
+                    }  // \$ = literal dollar sign (not interpolation)
                     Some(c) => s.push(c),
                     None => return Err(self.error("Unterminated string escape")),
                 }
@@ -422,6 +472,16 @@ impl Lexer {
                     Some('t') => s.push('\t'),
                     Some('\\') => s.push('\\'),
                     Some('"') => s.push('"'),
+                    Some('s') => s.push(' '),      // \s = space
+                    Some('b') => s.push('\x08'),  // \b = backspace
+                    Some('0') => s.push('\0'),    // \0 = null byte
+                    Some('a') => s.push('\x07'),  // \a = bell/alert
+                    Some('f') => s.push('\x0C'),  // \f = form feed
+                    Some('v') => s.push('\x0B'),  // \v = vertical tab
+                    Some('$') => {
+                        s.push('\x00');  // Use null byte as marker for escaped dollar
+                        s.push('$');
+                    }  // \$ = literal dollar sign (not interpolation)
                     Some(c) => s.push(c),
                     None => return Err(self.error("Unterminated multiline string escape")),
                 }
@@ -542,6 +602,33 @@ impl Lexer {
         let mut s = String::new();
         let mut is_float = false;
 
+        // Check for number base prefix (0x, 0o, 0b)
+        if self.peek() == Some('0') {
+            if let Some(prefix_ch) = self.peek_next() {
+                match prefix_ch {
+                    'x' | 'X' => {
+                        // Hexadecimal number
+                        self.advance(); // consume '0'
+                        self.advance(); // consume 'x' or 'X'
+                        return self.read_hex_number();
+                    }
+                    'o' | 'O' => {
+                        // Octal number
+                        self.advance(); // consume '0'
+                        self.advance(); // consume 'o' or 'O'
+                        return self.read_octal_number();
+                    }
+                    'b' | 'B' => {
+                        // Binary number
+                        self.advance(); // consume '0'
+                        self.advance(); // consume 'b' or 'B'
+                        return self.read_binary_number();
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         while let Some(ch) = self.peek() {
             if ch == '\'' {
                 // Digit separator (e.g., 1'000'000)
@@ -578,6 +665,103 @@ impl Lexer {
         }
     }
 
+    fn read_number_starting_with_dot(&mut self) -> Result<Token, String> {
+        let mut s = String::from(".");
+        self.advance(); // consume '.'
+
+        while let Some(ch) = self.peek() {
+            if ch == '\'' {
+                // Digit separator (e.g., .1'000'000)
+                self.advance();
+            } else if ch.is_ascii_digit() {
+                s.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        let (line, col) = self.get_pos();
+        s.parse::<f64>()
+            .map(Token::Float)
+            .map_err(|e| format!("[{}:{}] Invalid float: {}", line, col, e))
+    }
+
+    fn read_hex_number(&mut self) -> Result<Token, String> {
+        let mut s = String::new();
+        while let Some(ch) = self.peek() {
+            if ch == '\'' {
+                // Digit separator (e.g., 0x1A'FF)
+                self.advance();
+            } else if ch.is_ascii_hexdigit() {
+                s.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        if s.is_empty() {
+            let (line, col) = self.get_pos();
+            return Err(format!("[{}:{}] Invalid hex number: expected digits after 0x", line, col));
+        }
+
+        let (line, col) = self.get_pos();
+        i64::from_str_radix(&s, 16)
+            .map(Token::Int)
+            .map_err(|e| format!("[{}:{}] Invalid hex number: {}", line, col, e))
+    }
+
+    fn read_octal_number(&mut self) -> Result<Token, String> {
+        let mut s = String::new();
+        while let Some(ch) = self.peek() {
+            if ch == '\'' {
+                // Digit separator (e.g., 0o7'55)
+                self.advance();
+            } else if ch.is_ascii_digit() && ch != '8' && ch != '9' {
+                s.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        if s.is_empty() {
+            let (line, col) = self.get_pos();
+            return Err(format!("[{}:{}] Invalid octal number: expected digits after 0o", line, col));
+        }
+
+        let (line, col) = self.get_pos();
+        i64::from_str_radix(&s, 8)
+            .map(Token::Int)
+            .map_err(|e| format!("[{}:{}] Invalid octal number: {}", line, col, e))
+    }
+
+    fn read_binary_number(&mut self) -> Result<Token, String> {
+        let mut s = String::new();
+        while let Some(ch) = self.peek() {
+            if ch == '\'' {
+                // Digit separator (e.g., 0b1010'1100)
+                self.advance();
+            } else if ch == '0' || ch == '1' {
+                s.push(ch);
+                self.advance();
+            } else {
+                break;
+            }
+        }
+
+        if s.is_empty() {
+            let (line, col) = self.get_pos();
+            return Err(format!("[{}:{}] Invalid binary number: expected digits after 0b", line, col));
+        }
+
+        let (line, col) = self.get_pos();
+        i64::from_str_radix(&s, 2)
+            .map(Token::Int)
+            .map_err(|e| format!("[{}:{}] Invalid binary number: {}", line, col, e))
+    }
+
     pub fn tokenize(&mut self) -> Result<(Vec<Token>, Vec<usize>), String> {
         // Skip shebang line if it exists at the very beginning
         if self.pos == 0 && self.peek() == Some('#') && self.peek_next() == Some('!') {
@@ -611,5 +795,133 @@ impl Lexer {
             token_positions.push(token_pos);
         }
         Ok((tokens, token_positions))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tokenize(source: &str) -> Result<Vec<Token>, String> {
+        let mut lexer = Lexer::new(source, "test");
+        let (tokens, _) = lexer.tokenize()?;
+        Ok(tokens)
+    }
+
+    #[test]
+    fn test_hex_numbers() {
+        assert_eq!(tokenize("0xFF").unwrap(), vec![Token::Int(255), Token::Eof]);
+        assert_eq!(tokenize("0x1A").unwrap(), vec![Token::Int(26), Token::Eof]);
+        assert_eq!(tokenize("0x100").unwrap(), vec![Token::Int(256), Token::Eof]);
+        assert_eq!(tokenize("0x0").unwrap(), vec![Token::Int(0), Token::Eof]);
+        assert_eq!(tokenize("0XFF").unwrap(), vec![Token::Int(255), Token::Eof]);
+    }
+
+    #[test]
+    fn test_octal_numbers() {
+        assert_eq!(tokenize("0o77").unwrap(), vec![Token::Int(63), Token::Eof]);
+        assert_eq!(tokenize("0o10").unwrap(), vec![Token::Int(8), Token::Eof]);
+        assert_eq!(tokenize("0o0").unwrap(), vec![Token::Int(0), Token::Eof]);
+        assert_eq!(tokenize("0O77").unwrap(), vec![Token::Int(63), Token::Eof]);
+    }
+
+    #[test]
+    fn test_binary_numbers() {
+        assert_eq!(tokenize("0b1010").unwrap(), vec![Token::Int(10), Token::Eof]);
+        assert_eq!(tokenize("0b1111").unwrap(), vec![Token::Int(15), Token::Eof]);
+        assert_eq!(tokenize("0b0").unwrap(), vec![Token::Int(0), Token::Eof]);
+        assert_eq!(tokenize("0B1010").unwrap(), vec![Token::Int(10), Token::Eof]);
+    }
+
+    #[test]
+    fn test_number_with_separators() {
+        assert_eq!(tokenize("0x1A'FF").unwrap(), vec![Token::Int(6911), Token::Eof]);
+        assert_eq!(tokenize("0b1010'1100").unwrap(), vec![Token::Int(172), Token::Eof]);
+        assert_eq!(tokenize("0o7'55").unwrap(), vec![Token::Int(493), Token::Eof]);
+    }
+
+    #[test]
+    fn test_decimal_still_works() {
+        assert_eq!(tokenize("123").unwrap(), vec![Token::Int(123), Token::Eof]);
+        assert_eq!(tokenize("0").unwrap(), vec![Token::Int(0), Token::Eof]);
+        assert_eq!(tokenize("1'000'000").unwrap(), vec![Token::Int(1000000), Token::Eof]);
+    }
+
+    #[test]
+    fn test_bitwise_compound_assignment() {
+        assert_eq!(tokenize("x <<= 1").unwrap(), vec![
+            Token::Identifier("x".to_string()),
+            Token::ShiftLeftEqual,
+            Token::Int(1),
+            Token::Eof
+        ]);
+        assert_eq!(tokenize("x >>= 2").unwrap(), vec![
+            Token::Identifier("x".to_string()),
+            Token::ShiftRightEqual,
+            Token::Int(2),
+            Token::Eof
+        ]);
+        assert_eq!(tokenize("x &= 0xFF").unwrap(), vec![
+            Token::Identifier("x".to_string()),
+            Token::BitAndEqual,
+            Token::Int(255),
+            Token::Eof
+        ]);
+        assert_eq!(tokenize("x |= 0b1010").unwrap(), vec![
+            Token::Identifier("x".to_string()),
+            Token::BitOrEqual,
+            Token::Int(10),
+            Token::Eof
+        ]);
+        assert_eq!(tokenize("x ^= 0o77").unwrap(), vec![
+            Token::Identifier("x".to_string()),
+            Token::BitXorEqual,
+            Token::Int(63),
+            Token::Eof
+        ]);
+    }
+
+    #[test]
+    fn test_string_escapes() {
+        // Basic escapes
+        assert_eq!(tokenize("\"\\n\"").unwrap(), vec![Token::String("\n".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\r\"").unwrap(), vec![Token::String("\r".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\t\"").unwrap(), vec![Token::String("\t".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\\\\"").unwrap(), vec![Token::String("\\".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\\"\"").unwrap(), vec![Token::String("\"".to_string()), Token::Eof]);
+        
+        // New escapes
+        assert_eq!(tokenize("\"\\s\"").unwrap(), vec![Token::String(" ".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\b\"").unwrap(), vec![Token::String("\x08".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\0\"").unwrap(), vec![Token::String("\0".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\a\"").unwrap(), vec![Token::String("\x07".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\f\"").unwrap(), vec![Token::String("\x0C".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\v\"").unwrap(), vec![Token::String("\x0B".to_string()), Token::Eof]);
+    }
+
+    #[test]
+    fn test_string_combined_escapes() {
+        assert_eq!(tokenize("\"Hello\\sWorld\"").unwrap(), vec![Token::String("Hello World".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"Line1\\nLine2\"").unwrap(), vec![Token::String("Line1\nLine2".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"Tab\\tSeparated\"").unwrap(), vec![Token::String("Tab\tSeparated".to_string()), Token::Eof]);
+    }
+
+    #[test]
+    fn test_string_dollar_escape() {
+        // Escaped dollar sign - internally uses \x00$ marker to prevent interpolation
+        assert_eq!(tokenize("\"\\$\"").unwrap(), vec![Token::String("\x00$".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\$100\"").unwrap(), vec![Token::String("\x00$100".to_string()), Token::Eof]);
+        // Escaped interpolation syntax
+        assert_eq!(tokenize("\"\\${}\"").unwrap(), vec![Token::String("\x00${}".to_string()), Token::Eof]);
+        assert_eq!(tokenize("\"\\${x}\"").unwrap(), vec![Token::String("\x00${x}".to_string()), Token::Eof]);
+    }
+
+    #[test]
+    fn test_float_leading_dot() {
+        assert_eq!(tokenize(".05").unwrap(), vec![Token::Float(0.05), Token::Eof]);
+        assert_eq!(tokenize(".5").unwrap(), vec![Token::Float(0.5), Token::Eof]);
+        assert_eq!(tokenize(".0").unwrap(), vec![Token::Float(0.0), Token::Eof]);
+        assert_eq!(tokenize(".123").unwrap(), vec![Token::Float(0.123), Token::Eof]);
+        assert_eq!(tokenize(".1'000").unwrap(), vec![Token::Float(0.1), Token::Eof]);
     }
 }
