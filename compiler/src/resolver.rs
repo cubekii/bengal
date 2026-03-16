@@ -395,16 +395,21 @@ impl ModuleResolver {
                     } else {
                         format!("{}:{}", error.line, error.column)
                     };
-                    
+
                     error_msg.push_str(&format!("{}: error: {}\n", location, error.message));
-                    
-                    // Show code snippet if available
+
+                    // Show code snippet if available and message is single-line
                     if let Some(ref source_line) = error.source_line {
-                        error_msg.push_str(&format!("  {}\n", source_line));
-                        // Show caret pointing to the column
-                        let caret_pos = error.column.saturating_sub(1);
-                        let caret_line: String = " ".repeat(caret_pos) + "^";
-                        error_msg.push_str(&format!("  {}\n", caret_line));
+                        // For multi-line messages (containing newlines after first line), 
+                        // don't show caret as it's confusing
+                        let is_multiline = error.message.contains('\n');
+                        if !is_multiline {
+                            error_msg.push_str(&format!("  {}\n", source_line));
+                            // Show caret pointing to the column
+                            let caret_pos = error.column.saturating_sub(1);
+                            let caret_line: String = " ".repeat(caret_pos) + "^";
+                            error_msg.push_str(&format!("  {}\n", caret_line));
+                        }
                     }
                 }
                 Err(error_msg.trim().to_string())
@@ -443,14 +448,21 @@ impl ModuleResolver {
                         is_async: func.is_async,
                         is_native: func.is_native,
                         private: func.private,
+                        type_params: func.type_params.clone(),
                         mangled_name: None,
                     };
 
                     self.type_context.add_function(&full_name, sig.clone());
 
-                    // Also add unqualified version for public functions
+                    // Also add unqualified version for public functions in the current module
+                    // (not for imported modules, to avoid name conflicts)
                     if !func.private {
-                        self.type_context.add_function(&func.name, sig);
+                        let is_current_module = self.type_context.current_module.as_ref()
+                            .map(|m| m == &module_name)
+                            .unwrap_or(false);
+                        if is_current_module {
+                            self.type_context.add_function(&func.name, sig);
+                        }
                     }
                 }
                 Stmt::Let { name, type_annotation, expr: _, private, .. } => {
@@ -583,68 +595,7 @@ impl ModuleResolver {
     }
 
     fn register_native_functions(&mut self) {
-        // std.io functions
-        self.type_context.add_function("print", FunctionSignature {
-            name: "print".to_string(),
-            params: vec![ParamSignature {
-                name: "text".to_string(),
-                type_name: Some(Type::Str),
-            }],
-            return_type: None,
-            return_optional: false,
-            is_method: false,
-            is_async: false,
-            is_native: true,
-            private: false,
-            mangled_name: None,
-        });
-
-        // println with multiple overloads for different types
-        self.type_context.add_function("println", FunctionSignature {
-            name: "println".to_string(),
-            params: vec![ParamSignature {
-                name: "line".to_string(),
-                type_name: Some(Type::Str),
-            }],
-            return_type: None,
-            return_optional: false,
-            is_method: false,
-            is_async: false,
-            is_native: true,
-            private: false,
-            mangled_name: None,
-        });
-
-        self.type_context.add_function("println", FunctionSignature {
-            name: "println".to_string(),
-            params: vec![ParamSignature {
-                name: "line".to_string(),
-                type_name: Some(Type::Int),
-            }],
-            return_type: None,
-            return_optional: false,
-            is_method: false,
-            is_async: false,
-            is_native: true,
-            private: false,
-            mangled_name: None,
-        });
-
-        self.type_context.add_function("println", FunctionSignature {
-            name: "println".to_string(),
-            params: vec![ParamSignature {
-                name: "line".to_string(),
-                type_name: Some(Type::Float),
-            }],
-            return_type: None,
-            return_optional: false,
-            is_method: false,
-            is_async: false,
-            is_native: true,
-            private: false,
-            mangled_name: None,
-        });
-
+        // breakpoint function (always available)
         self.type_context.add_function("breakpoint", FunctionSignature {
             name: "breakpoint".to_string(),
             params: vec![],
@@ -654,6 +605,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
 
@@ -670,6 +622,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
         self.type_context.add_function("std.math.cos", FunctionSignature {
@@ -684,6 +637,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
         self.type_context.add_function("std.math.tan", FunctionSignature {
@@ -698,6 +652,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
         self.type_context.add_function("std.math.sqrt", FunctionSignature {
@@ -712,6 +667,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
         self.type_context.add_function("std.math.min", FunctionSignature {
@@ -729,6 +685,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
         self.type_context.add_function("std.math.max", FunctionSignature {
@@ -746,6 +703,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
 
@@ -762,6 +720,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
         self.type_context.add_function("std.test.recordPass", FunctionSignature {
@@ -773,6 +732,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
         self.type_context.add_function("std.test.setCurrentTest", FunctionSignature {
@@ -787,6 +747,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
         self.type_context.add_function("std.test.assertSame", FunctionSignature {
@@ -801,6 +762,7 @@ impl ModuleResolver {
             is_async: false,
             is_native: true,
             private: false,
+            type_params: Vec::new(),
             mangled_name: None,
         });
     }

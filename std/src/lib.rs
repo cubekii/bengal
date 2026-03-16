@@ -6,6 +6,7 @@ pub mod http;
 pub mod io;
 pub mod json;
 pub mod math;
+pub mod random;
 pub mod reflect;
 pub mod str;
 pub mod sys;
@@ -14,34 +15,9 @@ pub mod test;
 use sparkler::{NativeModule, Value, VM};
 
 pub fn register_all(vm: &mut VM) {
-    // Register print with mangled name and base name
-    vm.native("print(str)", io::native_print)
-        .description("Print without newline (str)")
-        .register(vm);
-    vm.native("print", io::native_print)
-        .description("Print without newline (any)")
-        .register(vm);
-
-    // Register println with multiple overloads for different types and base name
-    vm.native("println(str)", io::native_println)
-        .description("Print with newline (str)")
-        .register(vm);
-    vm.native("println(int)", io::native_println)
-        .description("Print with newline (int)")
-        .register(vm);
-    vm.native("println(float)", io::native_println)
-        .description("Print with newline (float)")
-        .register(vm);
-    vm.native("println(bool)", io::native_println)
-        .description("Print with newline (bool)")
-        .register(vm);
-    vm.native("println", io::native_println)
-        .description("Print with newline (any)")
-        .register(vm);
-
     NativeModule::new("std.io")
-        .function("print", io::native_print)
-        .function("println", io::native_println)
+        .function("print(str)", io::native_print)
+        .function("println(str)", io::native_println)
         .register(vm);
 
     NativeModule::new("std.data")
@@ -61,15 +37,15 @@ pub fn register_all(vm: &mut VM) {
         .class("HttpClient")
             .native_create(http::native_http_client_native_create)
             .method("constructor()", http::native_http_client_constructor)
-            .method("setTimeout(T)", http::native_http_client_set_timeout)
-            .method("setBaseUrl(T)", http::native_http_client_set_base_url)
-            .method("setRedirectPolicy(T)", http::native_http_client_set_redirect_policy)
-            .method("setMaxRedirects(T)", http::native_http_client_set_max_redirects)
-            .method("setProxy(T,T)", http::native_http_client_set_proxy)
-            .method("setVerifySsl(T)", http::native_http_client_set_verify_ssl)
-            .method("addHeader(T,T)", http::native_http_client_add_header)
-            .method("get(T)", http::native_http_client_get)
-            .method("post(T,T)", http::native_http_client_post)
+            .method("setTimeout(int)", http::native_http_client_set_timeout)
+            .method("setBaseUrl(str)", http::native_http_client_set_base_url)
+            .method("setRedirectPolicy(std.http.RedirectPolicy)", http::native_http_client_set_redirect_policy)
+            .method("setMaxRedirects(int)", http::native_http_client_set_max_redirects)
+            .method("setProxy(str,int)", http::native_http_client_set_proxy)
+            .method("setVerifySsl(bool)", http::native_http_client_set_verify_ssl)
+            .method("addHeader(str,str)", http::native_http_client_add_header)
+            .method("get(str)", http::native_http_client_get)
+            .method("post(str,str)", http::native_http_client_post)
             .register_class()
         .register(vm);
 
@@ -89,34 +65,34 @@ pub fn register_all(vm: &mut VM) {
             .method("length", str::native_str_length)
             .method("trim", str::native_str_trim)
             .method("split", str::native_str_split)
-            .method("to_int", str::native_str_to_int)
-            .method("to_float", str::native_str_to_float)
+            .method("toInt", str::native_str_to_int)
+            .method("toFloat", str::native_str_to_float)
             .method("contains", str::native_str_contains)
-            .method("starts_with", str::native_str_starts_with)
-            .method("ends_with", str::native_str_ends_with)
+            .method("startsWith", str::native_str_starts_with)
+            .method("endsWith", str::native_str_ends_with)
             .method("substring", str::native_str_substring)
-            .method("to_lowercase", str::native_str_to_lowercase)
-            .method("to_uppercase", str::native_str_to_uppercase)
+            .method("toLower", str::native_str_to_lowercase)
+            .method("toUpper", str::native_str_to_uppercase)
             .method("replace", str::native_str_replace)
             .register_class()
         .register(vm);
 
     // Register global str() function separately
     NativeModule::new("")
-        .function("str", str::native_str)
-        .function("int", str::native_int)
-        .function("float", str::native_float)
-        .function("bool", str::native_bool)
-        .function("int8", str::native_int8)
-        .function("uint8", str::native_uint8)
-        .function("int16", str::native_int16)
-        .function("uint16", str::native_uint16)
-        .function("int32", str::native_int32)
-        .function("uint32", str::native_uint32)
-        .function("int64", str::native_int64)
-        .function("uint64", str::native_uint64)
-        .function("float32", str::native_float32)
-        .function("float64", str::native_float64)
+        .function("str(unknown)", str::native_str)
+        .function("int(unknown)", str::native_int)
+        .function("float(unknown)", str::native_float)
+        .function("bool(unknown)", str::native_bool)
+        .function("int8(unknown)", str::native_int8)
+        .function("uint8(unknown)", str::native_uint8)
+        .function("int16(unknown)", str::native_int16)
+        .function("uint16(unknown)", str::native_uint16)
+        .function("int32(unknown)", str::native_int32)
+        .function("uint32(unknown)", str::native_uint32)
+        .function("int64(unknown)", str::native_int64)
+        .function("uint64(unknown)", str::native_uint64)
+        .function("float32(unknown)", str::native_float32)
+        .function("float64(unknown)", str::native_float64)
         .register(vm);
 
     NativeModule::new("std.sys")
@@ -204,6 +180,14 @@ pub fn register_all(vm: &mut VM) {
         .function("toDegrees", math::native_math_to_degrees)
         .function("check_overflow", math::native_math_check_overflow)
         .function("check_div_zero", math::native_math_check_div_zero)
+        .register(vm);
+
+    NativeModule::new("std.random")
+        .function("nextBool()", random::native_random_next_bool)
+        .function("nextInt()", random::native_random_next_int)
+        .function("nextIntRange(int,int)", random::native_random_next_int_range)
+        .function("nextFloat()", random::native_random_next_float)
+        .function("nextFloatRange(float,float)", random::native_random_next_float_range)
         .register(vm);
 
     NativeModule::new("std.test")

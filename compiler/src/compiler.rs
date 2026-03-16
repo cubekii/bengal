@@ -797,6 +797,14 @@ impl Compiler {
 
             match resolver_instance.build_type_context_with_source(&statements, &self.source, self._source_path.as_deref()) {
                 Ok(ctx) => {
+                    // Check if there were any type errors
+                    if ctx.has_errors() {
+                        let mut error_msg = String::new();
+                        for error in ctx.get_errors() {
+                            error_msg.push_str(&format!("{}\n", error.message));
+                        }
+                        return Err(format!("Type checking failed:\n{}", error_msg));
+                    }
                     type_context = Some(ctx.clone());
                     resolver = Some(resolver_instance);
                 }
@@ -1337,11 +1345,36 @@ impl Compiler {
 
         bytecode.push(Opcode::Halt as u8);
 
+        // Build vtables for interface dispatch
+        // Each class that implements an interface gets a vtable entry
+        let mut vtables = Vec::new();
+        for class_def in &vm_classes {
+            if !class_def.parent_interfaces.is_empty() || class_def.is_interface {
+                // This class implements interfaces - create a vtable
+                let vtable_methods: Vec<String> = class_def.vtable.iter()
+                    .map(|method_name| {
+                        // Extract base method name (without parameter signature)
+                        if let Some(paren_pos) = method_name.find('(') {
+                            method_name[..paren_pos].to_string()
+                        } else {
+                            method_name.clone()
+                        }
+                    })
+                    .collect();
+                
+                vtables.push(sparkler::executor::VTable {
+                    class_name: class_def.name.clone(),
+                    methods: vtable_methods,
+                });
+            }
+        }
+
         Ok(Bytecode {
             data: bytecode,
             strings,
             classes: vm_classes,
             functions: vm_functions,
+            vtables,
         })
     }
 
@@ -1537,82 +1570,174 @@ impl Compiler {
                 match target {
                     crate::parser::AugAssignTarget::Variable(name) => {
                         // Compile: name += expr  =>  name = name + expr
-                        // Get the register for the variable (must already exist)
-                        let r_var = self.current_ctx.get_local_reg(name);
+                        // Check if this is a global (module-level) variable
+                        let is_global = self.global_vars.contains(name);
+                        
+                        if is_global {
+                            // For global variables, we need to:
+                            // 1. Load the current value from the VM's locals HashMap
+                            // 2. Compile the RHS expression
+                            // 3. Perform the operation
+                            // 4. Store the result back to the VM's locals HashMap
+                            
+                            // Load current value
+                            let r_var = self.current_ctx.allocate_reg();
+                            let name_idx = add_string(strings, name.clone());
+                            bytecode.push(Opcode::LoadLocal as u8);
+                            bytecode.push(r_var as u8);
+                            bytecode.push(name_idx as u8);
+                            
+                            // Compile RHS expression
+                            let r_expr = self.compile_expr(expr, bytecode, strings, classes, type_context)?;
+                            
+                            // Perform operation
+                            let r_temp = self.current_ctx.allocate_reg();
+                            match op {
+                                crate::parser::AugOp::Add => {
+                                    bytecode.push(Opcode::Add as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::Subtract => {
+                                    bytecode.push(Opcode::Subtract as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::Multiply => {
+                                    bytecode.push(Opcode::Multiply as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::Divide => {
+                                    bytecode.push(Opcode::Divide as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::Modulo => {
+                                    bytecode.push(Opcode::Modulo as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::BitAnd => {
+                                    bytecode.push(Opcode::BitAnd as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::BitOr => {
+                                    bytecode.push(Opcode::BitOr as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::BitXor => {
+                                    bytecode.push(Opcode::BitXor as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::ShiftLeft => {
+                                    bytecode.push(Opcode::ShiftLeft as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::ShiftRight => {
+                                    bytecode.push(Opcode::ShiftRight as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                            }
+                            
+                            // Store result back to global variable
+                            bytecode.push(Opcode::StoreLocal as u8);
+                            bytecode.push(name_idx as u8);
+                            bytecode.push(r_temp as u8);
+                        } else {
+                            // For local variables (in functions), use register-based approach
+                            // Get the register for the variable (must already exist)
+                            let r_var = self.current_ctx.get_local_reg(name);
 
-                        // Compile the right-hand side expression
-                        let r_expr = self.compile_expr(expr, bytecode, strings, classes, type_context)?;
+                            // Compile the right-hand side expression
+                            let r_expr = self.compile_expr(expr, bytecode, strings, classes, type_context)?;
 
-                        // Perform the operation: r_var = r_var op r_expr
-                        // We need a temp register for the result
-                        let r_temp = self.current_ctx.allocate_reg();
-                        match op {
-                            crate::parser::AugOp::Add => {
-                                bytecode.push(Opcode::Add as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
+                            // Perform the operation: r_var = r_var op r_expr
+                            // We need a temp register for the result
+                            let r_temp = self.current_ctx.allocate_reg();
+                            match op {
+                                crate::parser::AugOp::Add => {
+                                    bytecode.push(Opcode::Add as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::Subtract => {
+                                    bytecode.push(Opcode::Subtract as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::Multiply => {
+                                    bytecode.push(Opcode::Multiply as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::Divide => {
+                                    bytecode.push(Opcode::Divide as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::Modulo => {
+                                    bytecode.push(Opcode::Modulo as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::BitAnd => {
+                                    bytecode.push(Opcode::BitAnd as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::BitOr => {
+                                    bytecode.push(Opcode::BitOr as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::BitXor => {
+                                    bytecode.push(Opcode::BitXor as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::ShiftLeft => {
+                                    bytecode.push(Opcode::ShiftLeft as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
+                                crate::parser::AugOp::ShiftRight => {
+                                    bytecode.push(Opcode::ShiftRight as u8);
+                                    bytecode.push(r_temp as u8);
+                                    bytecode.push(r_var as u8);
+                                    bytecode.push(r_expr as u8);
+                                }
                             }
-                            crate::parser::AugOp::Subtract => {
-                                bytecode.push(Opcode::Subtract as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
-                            crate::parser::AugOp::Multiply => {
-                                bytecode.push(Opcode::Multiply as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
-                            crate::parser::AugOp::Divide => {
-                                bytecode.push(Opcode::Divide as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
-                            crate::parser::AugOp::Modulo => {
-                                bytecode.push(Opcode::Modulo as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
-                            crate::parser::AugOp::BitAnd => {
-                                bytecode.push(Opcode::BitAnd as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
-                            crate::parser::AugOp::BitOr => {
-                                bytecode.push(Opcode::BitOr as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
-                            crate::parser::AugOp::BitXor => {
-                                bytecode.push(Opcode::BitXor as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
-                            crate::parser::AugOp::ShiftLeft => {
-                                bytecode.push(Opcode::ShiftLeft as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
-                            crate::parser::AugOp::ShiftRight => {
-                                bytecode.push(Opcode::ShiftRight as u8);
-                                bytecode.push(r_temp as u8);
-                                bytecode.push(r_var as u8);
-                                bytecode.push(r_expr as u8);
-                            }
+
+                            // Store result back to variable
+                            bytecode.push(Opcode::Move as u8);
+                            bytecode.push(r_var as u8);
+                            bytecode.push(r_temp as u8);
                         }
-
-                        // Store result back to variable
-                        bytecode.push(Opcode::Move as u8);
-                        bytecode.push(r_var as u8);
-                        bytecode.push(r_temp as u8);
                     }
                     crate::parser::AugAssignTarget::Field { object, name } => {
                         // Compile: obj.field += expr  =>  obj.field = obj.field + expr
@@ -2037,6 +2162,19 @@ impl Compiler {
                     return Ok(rd);
                 }
 
+                // Check if it's a known global from the type context (e.g., built-in ARGV)
+                if let Some(ctx) = type_context {
+                    if ctx.variables.contains_key(name) {
+                        // Use LoadLocal for known globals
+                        let rd = self.current_ctx.allocate_reg();
+                        let idx = add_string(strings, name.clone());
+                        bytecode.push(Opcode::LoadLocal as u8);
+                        bytecode.push(rd as u8);
+                        bytecode.push(idx as u8);
+                        return Ok(rd);
+                    }
+                }
+
                 if let Some(ctx) = type_context {
                     if let Some(current_class_name) = &ctx.current_class {
                         if let Some(class_info) = ctx.get_class(current_class_name) {
@@ -2197,34 +2335,83 @@ impl Compiler {
                     }
                     UnaryOp::PrefixIncrement => {
                         if let Expr::Variable { name, .. } = expr.as_ref() {
-                            let r_var = self.current_ctx.get_local_reg(name);
-
-                            // Save original value for overflow check
-                            let r_orig = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::Move as u8);
-                            bytecode.push(r_orig as u8);
-                            bytecode.push(r_var as u8);
-
-                            let r_one = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::LoadInt as u8);
-                            bytecode.push(r_one as u8);
-                            bytecode.extend_from_slice(&1i64.to_le_bytes());
-
-                            bytecode.push(Opcode::Add as u8);
-                            bytecode.push(r_var as u8);
-                            bytecode.push(r_var as u8);
-                            bytecode.push(r_one as u8);
-
-                            if !self.unsafe_fast {
-                                let type_id = self.get_type_id_for_var(name, type_context);
-                                self.emit_overflow_check(r_orig, r_one, r_var, 0, type_id, bytecode, strings);
+                            // Check if this is a global (module-level) variable
+                            let is_global = self.global_vars.contains(name);
+                            
+                            if is_global {
+                                // For global variables, use LoadLocal/StoreLocal
+                                let name_idx = add_string(strings, name.clone());
+                                
+                                // Load current value
+                                let r_var = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadLocal as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(name_idx as u8);
+                                
+                                // Save original value for overflow check
+                                let r_orig = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(r_orig as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                let r_one = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadInt as u8);
+                                bytecode.push(r_one as u8);
+                                bytecode.extend_from_slice(&1i64.to_le_bytes());
+                                
+                                // Increment: r_var = r_var + 1
+                                bytecode.push(Opcode::Add as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_one as u8);
+                                
+                                if !self.unsafe_fast {
+                                    let type_id = self.get_type_id_for_var(name, type_context);
+                                    self.emit_overflow_check(r_orig, r_one, r_var, 0, type_id, bytecode, strings);
+                                }
+                                
+                                // Store back to global variable
+                                bytecode.push(Opcode::StoreLocal as u8);
+                                bytecode.push(name_idx as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                // Return new value
+                                let rd = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(rd as u8);
+                                bytecode.push(r_var as u8);
+                                Ok(rd)
+                            } else {
+                                // For local variables, use register-based approach
+                                let r_var = self.current_ctx.get_local_reg(name);
+                                
+                                // Save original value for overflow check
+                                let r_orig = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(r_orig as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                let r_one = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadInt as u8);
+                                bytecode.push(r_one as u8);
+                                bytecode.extend_from_slice(&1i64.to_le_bytes());
+                                
+                                bytecode.push(Opcode::Add as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_one as u8);
+                                
+                                if !self.unsafe_fast {
+                                    let type_id = self.get_type_id_for_var(name, type_context);
+                                    self.emit_overflow_check(r_orig, r_one, r_var, 0, type_id, bytecode, strings);
+                                }
+                                
+                                let rd = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(rd as u8);
+                                bytecode.push(r_var as u8);
+                                Ok(rd)
                             }
-
-                            let rd = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::Move as u8);
-                            bytecode.push(rd as u8);
-                            bytecode.push(r_var as u8);
-                            Ok(rd)
                         } else if let Expr::Get { object, name, .. } = expr.as_ref() {
                             // For obj.field: load field, increment, store back, return new value
                             let r_obj = self.compile_expr(object, bytecode, strings, classes, type_context)?;
@@ -2284,34 +2471,83 @@ impl Compiler {
                     }
                     UnaryOp::PrefixDecrement => {
                         if let Expr::Variable { name, .. } = expr.as_ref() {
-                            let r_var = self.current_ctx.get_local_reg(name);
-
-                            // Save original value for overflow check
-                            let r_orig = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::Move as u8);
-                            bytecode.push(r_orig as u8);
-                            bytecode.push(r_var as u8);
-
-                            let r_one = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::LoadInt as u8);
-                            bytecode.push(r_one as u8);
-                            bytecode.extend_from_slice(&1i64.to_le_bytes());
-
-                            bytecode.push(Opcode::Subtract as u8);
-                            bytecode.push(r_var as u8);
-                            bytecode.push(r_var as u8);
-                            bytecode.push(r_one as u8);
-
-                            if !self.unsafe_fast {
-                                let type_id = self.get_type_id_for_var(name, type_context);
-                                self.emit_overflow_check(r_orig, r_one, r_var, 1, type_id, bytecode, strings);
+                            // Check if this is a global (module-level) variable
+                            let is_global = self.global_vars.contains(name);
+                            
+                            if is_global {
+                                // For global variables, use LoadLocal/StoreLocal
+                                let name_idx = add_string(strings, name.clone());
+                                
+                                // Load current value
+                                let r_var = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadLocal as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(name_idx as u8);
+                                
+                                // Save original value for overflow check
+                                let r_orig = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(r_orig as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                let r_one = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadInt as u8);
+                                bytecode.push(r_one as u8);
+                                bytecode.extend_from_slice(&1i64.to_le_bytes());
+                                
+                                // Decrement: r_var = r_var - 1
+                                bytecode.push(Opcode::Subtract as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_one as u8);
+                                
+                                if !self.unsafe_fast {
+                                    let type_id = self.get_type_id_for_var(name, type_context);
+                                    self.emit_overflow_check(r_orig, r_one, r_var, 1, type_id, bytecode, strings);
+                                }
+                                
+                                // Store back to global variable
+                                bytecode.push(Opcode::StoreLocal as u8);
+                                bytecode.push(name_idx as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                // Return new value
+                                let rd = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(rd as u8);
+                                bytecode.push(r_var as u8);
+                                Ok(rd)
+                            } else {
+                                // For local variables, use register-based approach
+                                let r_var = self.current_ctx.get_local_reg(name);
+                                
+                                // Save original value for overflow check
+                                let r_orig = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(r_orig as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                let r_one = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadInt as u8);
+                                bytecode.push(r_one as u8);
+                                bytecode.extend_from_slice(&1i64.to_le_bytes());
+                                
+                                bytecode.push(Opcode::Subtract as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_one as u8);
+                                
+                                if !self.unsafe_fast {
+                                    let type_id = self.get_type_id_for_var(name, type_context);
+                                    self.emit_overflow_check(r_orig, r_one, r_var, 1, type_id, bytecode, strings);
+                                }
+                                
+                                let rd = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(rd as u8);
+                                bytecode.push(r_var as u8);
+                                Ok(rd)
                             }
-
-                            let rd = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::Move as u8);
-                            bytecode.push(rd as u8);
-                            bytecode.push(r_var as u8);
-                            Ok(rd)
                         } else if let Expr::Get { object, name, .. } = expr.as_ref() {
                             // For obj.field: load field, decrement, store back, return new value
                             let r_obj = self.compile_expr(object, bytecode, strings, classes, type_context)?;
@@ -2369,28 +2605,72 @@ impl Compiler {
                     }
                     UnaryOp::PostfixIncrement => {
                         if let Expr::Variable { name, .. } = expr.as_ref() {
-                            let r_var = self.current_ctx.get_local_reg(name);
-                            let rd = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::Move as u8);
-                            bytecode.push(rd as u8);
-                            bytecode.push(r_var as u8);
-
-                            let r_one = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::LoadInt as u8);
-                            bytecode.push(r_one as u8);
-                            bytecode.extend_from_slice(&1i64.to_le_bytes());
-
-                            bytecode.push(Opcode::Add as u8);
-                            bytecode.push(r_var as u8);
-                            bytecode.push(r_var as u8);
-                            bytecode.push(r_one as u8);
-
-                            if !self.unsafe_fast {
-                                let type_id = self.get_type_id_for_var(name, type_context);
-                                self.emit_overflow_check(rd, r_one, r_var, 0, type_id, bytecode, strings);
+                            // Check if this is a global (module-level) variable
+                            let is_global = self.global_vars.contains(name);
+                            
+                            if is_global {
+                                // For global variables, use LoadLocal/StoreLocal
+                                let name_idx = add_string(strings, name.clone());
+                                
+                                // Load current value and save as return value
+                                let r_var = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadLocal as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(name_idx as u8);
+                                
+                                // Save original value for return
+                                let rd = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(rd as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                let r_one = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadInt as u8);
+                                bytecode.push(r_one as u8);
+                                bytecode.extend_from_slice(&1i64.to_le_bytes());
+                                
+                                // Increment: r_var = r_var + 1
+                                bytecode.push(Opcode::Add as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_one as u8);
+                                
+                                if !self.unsafe_fast {
+                                    let type_id = self.get_type_id_for_var(name, type_context);
+                                    self.emit_overflow_check(rd, r_one, r_var, 0, type_id, bytecode, strings);
+                                }
+                                
+                                // Store back to global variable
+                                bytecode.push(Opcode::StoreLocal as u8);
+                                bytecode.push(name_idx as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                Ok(rd)
+                            } else {
+                                // For local variables, use register-based approach
+                                let r_var = self.current_ctx.get_local_reg(name);
+                                let rd = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(rd as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                let r_one = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadInt as u8);
+                                bytecode.push(r_one as u8);
+                                bytecode.extend_from_slice(&1i64.to_le_bytes());
+                                
+                                bytecode.push(Opcode::Add as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_one as u8);
+                                
+                                if !self.unsafe_fast {
+                                    let type_id = self.get_type_id_for_var(name, type_context);
+                                    self.emit_overflow_check(rd, r_one, r_var, 0, type_id, bytecode, strings);
+                                }
+                                
+                                Ok(rd)
                             }
-
-                            Ok(rd)
                         } else if let Expr::Get { object, name, .. } = expr.as_ref() {
                             // For obj.field: save original value, increment field, return original
                             let r_obj = self.compile_expr(object, bytecode, strings, classes, type_context)?;
@@ -2444,28 +2724,72 @@ impl Compiler {
                     }
                     UnaryOp::PostfixDecrement | UnaryOp::Decrement => {
                         if let Expr::Variable { name, .. } = expr.as_ref() {
-                            let r_var = self.current_ctx.get_local_reg(name);
-                            let rd = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::Move as u8);
-                            bytecode.push(rd as u8);
-                            bytecode.push(r_var as u8);
-
-                            let r_one = self.current_ctx.allocate_reg();
-                            bytecode.push(Opcode::LoadInt as u8);
-                            bytecode.push(r_one as u8);
-                            bytecode.extend_from_slice(&1i64.to_le_bytes());
-
-                            bytecode.push(Opcode::Subtract as u8);
-                            bytecode.push(r_var as u8);
-                            bytecode.push(r_var as u8);
-                            bytecode.push(r_one as u8);
-
-                            if !self.unsafe_fast {
-                                let type_id = self.get_type_id_for_var(name, type_context);
-                                self.emit_overflow_check(rd, r_one, r_var, 1, type_id, bytecode, strings);
+                            // Check if this is a global (module-level) variable
+                            let is_global = self.global_vars.contains(name);
+                            
+                            if is_global {
+                                // For global variables, use LoadLocal/StoreLocal
+                                let name_idx = add_string(strings, name.clone());
+                                
+                                // Load current value and save as return value
+                                let r_var = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadLocal as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(name_idx as u8);
+                                
+                                // Save original value for return
+                                let rd = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(rd as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                let r_one = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadInt as u8);
+                                bytecode.push(r_one as u8);
+                                bytecode.extend_from_slice(&1i64.to_le_bytes());
+                                
+                                // Decrement: r_var = r_var - 1
+                                bytecode.push(Opcode::Subtract as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_one as u8);
+                                
+                                if !self.unsafe_fast {
+                                    let type_id = self.get_type_id_for_var(name, type_context);
+                                    self.emit_overflow_check(rd, r_one, r_var, 1, type_id, bytecode, strings);
+                                }
+                                
+                                // Store back to global variable
+                                bytecode.push(Opcode::StoreLocal as u8);
+                                bytecode.push(name_idx as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                Ok(rd)
+                            } else {
+                                // For local variables, use register-based approach
+                                let r_var = self.current_ctx.get_local_reg(name);
+                                let rd = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::Move as u8);
+                                bytecode.push(rd as u8);
+                                bytecode.push(r_var as u8);
+                                
+                                let r_one = self.current_ctx.allocate_reg();
+                                bytecode.push(Opcode::LoadInt as u8);
+                                bytecode.push(r_one as u8);
+                                bytecode.extend_from_slice(&1i64.to_le_bytes());
+                                
+                                bytecode.push(Opcode::Subtract as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_var as u8);
+                                bytecode.push(r_one as u8);
+                                
+                                if !self.unsafe_fast {
+                                    let type_id = self.get_type_id_for_var(name, type_context);
+                                    self.emit_overflow_check(rd, r_one, r_var, 1, type_id, bytecode, strings);
+                                }
+                                
+                                Ok(rd)
                             }
-
-                            Ok(rd)
                         } else if let Expr::Get { object, name, .. } = expr.as_ref() {
                             // For obj.field: save original value, decrement field, return original
                             let r_obj = self.compile_expr(object, bytecode, strings, classes, type_context)?;
@@ -2555,9 +2879,13 @@ impl Compiler {
                         // For generic class instantiations like Array<T>(args), extract base class name
                         let base_class_name = extract_base_class_name(func_name);
                         
+                        // For generic function calls like identity<T>(args), extract base function name
+                        let base_func_name = extract_base_class_name(func_name);
+
                         // Check for function call first if there are arguments (to handle str() function vs str class)
                         if !args.is_empty() {
-                            if let Some(sig) = ctx.resolve_function_call(func_name, &arg_types) {
+                            // Try base function name first (for generic functions like identity<T>)
+                            if let Some(sig) = ctx.resolve_function_call(base_func_name, &arg_types) {
                                 resolved_name = sig.mangled_name.clone().unwrap_or(sig.name.clone());
                                 is_native = sig.is_native;
                             } else if let Some(resolved_class) = ctx.resolve_class(base_class_name) {
@@ -2569,7 +2897,7 @@ impl Compiler {
                             if let Some(resolved_class) = ctx.resolve_class(base_class_name) {
                                 resolved_name = resolved_class;
                                 is_class = true;
-                            } else if let Some(sig) = ctx.resolve_function_call(func_name, &arg_types) {
+                            } else if let Some(sig) = ctx.resolve_function_call(base_func_name, &arg_types) {
                                 resolved_name = sig.mangled_name.clone().unwrap_or(sig.name.clone());
                                 is_native = sig.is_native;
                             }
@@ -2689,19 +3017,6 @@ impl Compiler {
                             bytecode.push(r as u8);
                         }
 
-                        // Generate mangled method name based on argument count
-                        let mangled_method = if args.is_empty() {
-                            format!("{}()", func_name)
-                        } else {
-                            let mut params = Vec::new();
-                            for _ in 0..args.len() {
-                                params.push("T".to_string());
-                            }
-                            format!("{}({})", func_name, params.join(","))
-                        };
-
-                        let idx = add_string(strings, mangled_method);
-
                         // Check if this is an interface method
                         let is_interface_method = if let Some(ctx) = type_context {
                             if let Some(current_class) = &ctx.current_class {
@@ -2712,14 +3027,51 @@ impl Compiler {
                         } else { false };
 
                         if is_interface_method {
+                            // For interface calls, use method index in vtable
+                            // Find the method's position in the interface's vtable
+                            let method_idx = if let Some(ctx) = type_context {
+                                if let Some(current_class) = &ctx.current_class {
+                                    if let Some(class_info) = ctx.get_class(current_class) {
+                                        // Find the method index in the vtable
+                                        class_info.vtable.iter().position(|m| {
+                                            // Compare base names (without parameter signature)
+                                            if let Some(paren_pos) = m.find('(') {
+                                                &m[..paren_pos] == func_name
+                                            } else {
+                                                m == func_name
+                                            }
+                                        }).unwrap_or(0)
+                                    } else { 0 }
+                                } else { 0 }
+                            } else { 0 };
+
                             bytecode.push(Opcode::InvokeInterface as u8);
+                            bytecode.push(rd as u8);
+                            bytecode.push(method_idx as u8);
+                            bytecode.push(contiguous_start as u8);
+                            bytecode.push((args.len() + 1) as u8);
                         } else {
+                            // Regular method call - use mangled method name
+                            let mangled_method = if args.is_empty() {
+                                format!("{}()", func_name)
+                            } else {
+                                // Infer types from arguments for proper overload resolution
+                                let ctx_for_infer = type_context.map(|tc| tc.clone()).unwrap_or_else(|| TypeContext::new());
+                                let mut params = Vec::new();
+                                for arg in args {
+                                    let arg_type = self.infer_expr_type(arg, &ctx_for_infer);
+                                    params.push(arg_type.to_str());
+                                }
+                                format!("{}({})", func_name, params.join(","))
+                            };
+
+                            let idx = add_string(strings, mangled_method);
                             bytecode.push(Opcode::Invoke as u8);
+                            bytecode.push(rd as u8);
+                            bytecode.push(idx as u8);
+                            bytecode.push(contiguous_start as u8);
+                            bytecode.push((args.len() + 1) as u8);
                         }
-                        bytecode.push(rd as u8);
-                        bytecode.push(idx as u8);
-                        bytecode.push(contiguous_start as u8);
-                        bytecode.push((args.len() + 1) as u8);
                     } else {
                         // Regular function call
                         let contiguous_start = self.current_ctx.allocate_regs(args.len());
@@ -2730,12 +3082,8 @@ impl Compiler {
                             bytecode.push(r as u8);
                         }
 
-                        // For native functions, use the base name (not mangled name) for lookup
-                        let call_name = if is_native {
-                            func_name.clone()
-                        } else {
-                            resolved_name.clone()
-                        };
+                        // For native functions, use the resolved name (which includes module prefix for imports)
+                        let call_name = resolved_name.clone();
                         let idx = add_string(strings, call_name.clone());
 
                         // Use CallNative for native functions, Call for bytecode functions
@@ -2783,13 +3131,16 @@ impl Compiler {
                             bytecode.push(r as u8);
                         }
 
-                        // Generate mangled method name (same as stored in class)
+                        // Generate mangled method name based on actual argument types
                         let mangled_method = if args.is_empty() {
                             format!("{}()", name)
                         } else {
+                            // Infer types from arguments for proper overload resolution
+                            let ctx_for_infer = type_context.map(|tc| tc.clone()).unwrap_or_else(|| TypeContext::new());
                             let mut params = Vec::new();
-                            for _ in 0..args.len() {
-                                params.push("T".to_string());
+                            for arg in args {
+                                let arg_type = self.infer_expr_type(arg, &ctx_for_infer);
+                                params.push(arg_type.to_str());
                             }
                             format!("{}({})", name, params.join(","))
                         };
@@ -2821,19 +3172,6 @@ impl Compiler {
                             bytecode.push(r as u8);
                         }
 
-                        // Generate mangled method name based on argument count
-                        let mangled_method = if args.is_empty() {
-                            format!("{}()", name)
-                        } else {
-                            let mut params = Vec::new();
-                            for _ in 0..args.len() {
-                                params.push("T".to_string());
-                            }
-                            format!("{}({})", name, params.join(","))
-                        };
-
-                        let idx = add_string(strings, mangled_method);
-
                         // Check if this is an interface method call
                         let is_interface_method = if let Some(ctx) = type_context {
                             // Try to get the type of the object
@@ -2847,14 +3185,48 @@ impl Compiler {
                         } else { false };
 
                         if is_interface_method {
+                            // For interface calls, use method index in vtable
+                            let method_idx = if let Some(ctx) = type_context {
+                                if let Some(current_class) = &ctx.current_class {
+                                    if let Some(class_info) = ctx.get_class(current_class) {
+                                        class_info.vtable.iter().position(|m| {
+                                            if let Some(paren_pos) = m.find('(') {
+                                                &m[..paren_pos] == name
+                                            } else {
+                                                m == name
+                                            }
+                                        }).unwrap_or(0)
+                                    } else { 0 }
+                                } else { 0 }
+                            } else { 0 };
+
                             bytecode.push(Opcode::InvokeInterface as u8);
+                            bytecode.push(rd as u8);
+                            bytecode.push(method_idx as u8);
+                            bytecode.push(contiguous_start as u8);
+                            bytecode.push((args.len() + 1) as u8);
                         } else {
+                            // Regular method call - use mangled method name
+                            let mangled_method = if args.is_empty() {
+                                format!("{}()", name)
+                            } else {
+                                // Infer types from arguments for proper overload resolution
+                                let ctx_for_infer = type_context.map(|tc| tc.clone()).unwrap_or_else(|| TypeContext::new());
+                                let mut params = Vec::new();
+                                for arg in args {
+                                    let arg_type = self.infer_expr_type(arg, &ctx_for_infer);
+                                    params.push(arg_type.to_str());
+                                }
+                                format!("{}({})", name, params.join(","))
+                            };
+
+                            let idx = add_string(strings, mangled_method);
                             bytecode.push(Opcode::Invoke as u8);
+                            bytecode.push(rd as u8);
+                            bytecode.push(idx as u8);
+                            bytecode.push(contiguous_start as u8);
+                            bytecode.push((args.len() + 1) as u8);
                         }
-                        bytecode.push(rd as u8);
-                        bytecode.push(idx as u8);
-                        bytecode.push(contiguous_start as u8);
-                        bytecode.push((args.len() + 1) as u8);
                     }
                 }
                 Ok(rd)

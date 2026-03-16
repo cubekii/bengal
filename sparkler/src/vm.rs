@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use tokio::sync::Mutex as TokioMutex;
+use crate::async_runtime::{self, Mutex as AsyncMutex};
 use serde::{Serialize, Deserialize, Serializer, Deserializer};
 use serde::ser::SerializeMap;
 use serde::de::{MapAccess, Visitor};
 use std::fmt;
+#[cfg(not(target_arch = "wasm32"))]
 use async_recursion::async_recursion;
 use std::any::Any;
 use crate::linker::NativeFunctionRegistry;
@@ -111,7 +112,7 @@ pub enum Value {
     Null,
     Instance(Arc<Mutex<Instance>>),
     Array(Arc<Mutex<Vec<Value>>>),
-    Promise(Arc<TokioMutex<PromiseState>>),
+    Promise(Arc<AsyncMutex<PromiseState>>),
     Exception(Exception),
 }
 
@@ -404,7 +405,6 @@ pub struct NativeFunctionBuilder {
     func: NativeFn,
     param_count: Option<usize>,
     return_type: Option<String>,
-    description: Option<String>,
 }
 
 impl NativeFunctionBuilder {
@@ -414,7 +414,6 @@ impl NativeFunctionBuilder {
             func,
             param_count: None,
             return_type: None,
-            description: None,
         }
     }
 
@@ -425,11 +424,6 @@ impl NativeFunctionBuilder {
 
     pub fn returns(mut self, type_name: &str) -> Self {
         self.return_type = Some(type_name.to_string());
-        self
-    }
-
-    pub fn description(mut self, desc: &str) -> Self {
-        self.description = Some(desc.to_string());
         self
     }
 
@@ -719,6 +713,15 @@ pub struct VM {
     pub breakpoints: std::collections::HashSet<(String, usize)>,
     /// Whether debugging mode is enabled
     pub is_debugging: bool,
+    /// Vtables for interface method dispatch (indexed by vtable_idx)
+    vtables: Vec<VTable>,
+}
+
+/// VTable entry for interface method dispatch
+#[derive(Clone, Debug)]
+pub struct VTable {
+    pub class_name: String,
+    pub methods: Vec<String>,  // Ordered list of method names (by vtable index)
 }
 
 #[derive(Clone)]
@@ -760,6 +763,7 @@ impl VM {
             current_line: 1,
             breakpoints: std::collections::HashSet::new(),
             is_debugging: false,
+            vtables: Vec::new(),
         }
     }
 
@@ -811,9 +815,10 @@ impl VM {
     }
 
     /// Load bytecode and initialize the VM
-    pub fn load(&mut self, bytecode: &[u8], strings: Vec<String>, classes: Vec<Class>, functions: Vec<Function>) -> Result<(), String> {
+    pub fn load(&mut self, bytecode: &[u8], strings: Vec<String>, classes: Vec<Class>, functions: Vec<Function>, vtables: Vec<VTable>) -> Result<(), String> {
         self.bytecode = bytecode.to_vec();
         self.strings = strings;
+        self.vtables = vtables;
 
         self.classes.clear();
         for mut class in classes {
@@ -830,7 +835,7 @@ impl VM {
             }
             self.classes.insert(class.name.clone(), class);
         }
-        
+
         self.functions.clear();
         for function in functions {
             self.functions.insert(function.name.clone(), function);
@@ -839,7 +844,7 @@ impl VM {
         // Initialize for execution
         self.set_pc(0);
         self.registers.fill(Value::Null);
-        
+
         // Create initial call frame for module-level code
         self.call_stack = vec![CallFrame::new(
             0,
@@ -849,9 +854,19 @@ impl VM {
             "<main>".to_string(),
             self.source_file.clone(),
         )];
-        
+
         self.current_line = 1;
         Ok(())
+    }
+
+    /// Set a local variable by name
+    pub fn set_local(&mut self, name: &str, value: Value) {
+        self.locals.insert(name.to_string(), value);
+    }
+
+    /// Get a local variable by name
+    pub fn get_local(&self, name: &str) -> Option<&Value> {
+        self.locals.get(name)
     }
 
     /// Get current PC from the top frame
@@ -914,54 +929,131 @@ impl VM {
         self.source_file.clone()
     }
 
-    #[async_recursion]
+    #[cfg_attr(not(target_arch = "wasm32"), async_recursion)]
+    #[cfg_attr(target_arch = "wasm32", allow(unused))]
     pub async fn run(&mut self) -> Result<RunResult, Value> {
-        while self.pc() < self.bytecode.len() {
-            let opcode = self.bytecode[self.pc()];
-            let result = match self.execute(opcode).await {
-                Ok(res) => res,
-                Err(e) => {
-                    let exception = match &e {
-                        Value::Exception(existing) => existing.clone(),
-                        _ => self.build_exception(&e),
-                    };
+        #[cfg(target_arch = "wasm32")]
+        {
+            use std::pin::Pin;
+            use std::future::Future;
+            
+            // On WASM, use Box::pin for recursive calls
+            let mut result: Option<Result<RunResult, Value>> = None;
+            
+            loop {
+                if self.pc() >= self.bytecode.len() {
+                    if let Some(frame) = self.call_stack.last() {
+                        if frame.is_native {
+                            self.call_stack.pop();
+                            if self.call_stack.is_empty() {
+                                break;
+                            }
+                            continue;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                
+                let opcode = self.bytecode[self.pc()];
+                let exec_result = match self.execute(opcode).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        let exception = match &e {
+                            Value::Exception(existing) => existing.clone(),
+                            _ => self.build_exception(&e),
+                        };
 
-                    // Only catch if we have a handler in the current call frame
-                    let mut has_local_handler = false;
-                    if let Some(handler) = self.exception_handlers.last() {
-                        if handler.call_stack_depth == self.call_stack.len() {
-                            has_local_handler = true;
+                        let mut has_local_handler = false;
+                        if let Some(handler) = self.exception_handlers.last() {
+                            if handler.call_stack_depth == self.call_stack.len() {
+                                has_local_handler = true;
+                            }
+                        }
+
+                        if has_local_handler {
+                            let handler = self.exception_handlers.pop().unwrap();
+                            self.set_pc(handler.catch_pc);
+                            self.set_reg(handler.catch_register as u8, Value::Exception(exception));
+                            continue;
+                        } else {
+                            return Err(Value::Exception(exception));
                         }
                     }
+                };
 
-                    if has_local_handler {
-                        let handler = self.exception_handlers.pop().unwrap();
-                        self.set_pc(handler.catch_pc);
-                        self.set_reg(handler.catch_register as u8, Value::Exception(exception));
-                        continue;
+                if opcode == Opcode::Halt as u8 || opcode == Opcode::Return as u8 {
+                    if !self.call_stack.is_empty() {
+                        self.call_stack.pop();
+                        if self.call_stack.is_empty() {
+                            break;
+                        }
                     } else {
-                        return Err(Value::Exception(exception));
+                        break;
                     }
                 }
-            };
 
-            if opcode == Opcode::Halt as u8 || opcode == Opcode::Return as u8 {
-                break;
-            }
-
-            match result {
-                ExecutionResult::Awaiting(promise) => return Ok(RunResult::Awaiting(promise)),
-                ExecutionResult::Breakpoint => {
-                    return Ok(RunResult::Breakpoint);
+                match exec_result {
+                    ExecutionResult::Awaiting(promise) => return Ok(RunResult::Awaiting(promise)),
+                    ExecutionResult::Breakpoint => {
+                        return Ok(RunResult::Breakpoint);
+                    }
+                    ExecutionResult::Continue => {}
                 }
-                ExecutionResult::Continue => {}
             }
 
-            // execute() is responsible for setting PC to next instruction
-            // No increment needed here
+            Ok(RunResult::Finished(Some(self.get_reg(0).clone())))
         }
+        
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            loop {
+                if self.pc() >= self.bytecode.len() {
+                    break;
+                }
+                
+                let opcode = self.bytecode[self.pc()];
+                let result = match self.execute(opcode).await {
+                    Ok(res) => res,
+                    Err(e) => {
+                        let exception = match &e {
+                            Value::Exception(existing) => existing.clone(),
+                            _ => self.build_exception(&e),
+                        };
 
-        Ok(RunResult::Finished(Some(self.get_reg(0).clone())))
+                        let mut has_local_handler = false;
+                        if let Some(handler) = self.exception_handlers.last() {
+                            if handler.call_stack_depth == self.call_stack.len() {
+                                has_local_handler = true;
+                            }
+                        }
+
+                        if has_local_handler {
+                            let handler = self.exception_handlers.pop().unwrap();
+                            self.set_pc(handler.catch_pc);
+                            self.set_reg(handler.catch_register as u8, Value::Exception(exception));
+                            continue;
+                        } else {
+                            return Err(Value::Exception(exception));
+                        }
+                    }
+                };
+
+                if opcode == Opcode::Halt as u8 || opcode == Opcode::Return as u8 {
+                    break;
+                }
+
+                match result {
+                    ExecutionResult::Awaiting(promise) => return Ok(RunResult::Awaiting(promise)),
+                    ExecutionResult::Breakpoint => {
+                        return Ok(RunResult::Breakpoint);
+                    }
+                    ExecutionResult::Continue => {}
+                }
+            }
+
+            Ok(RunResult::Finished(Some(self.get_reg(0).clone())))
+        }
     }
 
     fn build_exception(&self, value: &Value) -> Exception {
@@ -982,7 +1074,7 @@ impl VM {
         Exception::new(message, stack_trace)
     }
 
-    #[async_recursion]
+    #[cfg_attr(not(target_arch = "wasm32"), async_recursion)]
     async fn execute(&mut self, opcode: u8) -> Result<ExecutionResult, Value> {
         match opcode {
             x if x == Opcode::Nop as u8 => {
@@ -1120,6 +1212,15 @@ impl VM {
                             self.set_reg(rd, Value::String(trace));
                         } else {
                             self.set_reg(rd, Value::Null);
+                        }
+                    }
+                    Value::Array(arr) => {
+                        // Handle array properties
+                        if name == "length" {
+                            let elements = arr.lock().unwrap();
+                            self.set_reg(rd, Value::Int64(elements.len() as i64));
+                        } else {
+                            return Err(Value::String(format!("Unknown property '{}' on Array", name)));
                         }
                     }
                     _ => {
@@ -1262,6 +1363,9 @@ impl VM {
                     let old_classes = std::mem::replace(&mut self.classes, new_classes);
 
                     // Execute function
+                    #[cfg(target_arch = "wasm32")]
+                    let result = Box::pin(self.run()).await;
+                    #[cfg(not(target_arch = "wasm32"))]
                     let result = self.run().await;
 
                     // Restore state
@@ -1390,7 +1494,14 @@ impl VM {
                 // Check if this is an array method call
                 if let Some(Value::Array(_)) = args.first() {
                     // Handle array native methods directly
-                    let result = match name.as_str() {
+                    // Strip parameter signature from mangled name (e.g., "add(Unknown)" -> "add")
+                    let base_name = if let Some(paren_pos) = name.find('(') {
+                        &name[..paren_pos]
+                    } else {
+                        &name
+                    };
+
+                    let result = match base_name {
                         "length" => {
                             if let Value::Array(arr) = &args[0] {
                                 let elements = arr.lock().unwrap();
@@ -1413,6 +1524,151 @@ impl VM {
                         _ => Err(Value::String(format!("Method '{}' not found on Array", name))),
                     };
                     self.set_reg(rd, result?);
+                // Check if this is a string method call
+                } else if let Some(Value::String(_)) = args.first() {
+                    // Strip parameter signature from mangled name (e.g., "toInt()" -> "toInt")
+                    let base_name = if let Some(paren_pos) = name.find('(') {
+                        &name[..paren_pos]
+                    } else {
+                        &name
+                    };
+
+                    let result = match base_name {
+                        "length" => {
+                            if let Value::String(s) = &args[0] {
+                                Ok(Value::Int64(s.len() as i64))
+                            } else {
+                                Err(Value::String("length requires a string".to_string()))
+                            }
+                        }
+                        "trim" => {
+                            if let Value::String(s) = &args[0] {
+                                Ok(Value::String(s.trim().to_string()))
+                            } else {
+                                Err(Value::String("trim requires a string".to_string()))
+                            }
+                        }
+                        "toInt" => {
+                            if let Value::String(s) = &args[0] {
+                                match s.parse::<i64>() {
+                                    Ok(n) => Ok(Value::Int64(n)),
+                                    Err(_) => Ok(Value::Null),
+                                }
+                            } else {
+                                Err(Value::String("toInt requires a string".to_string()))
+                            }
+                        }
+                        "toFloat" => {
+                            if let Value::String(s) = &args[0] {
+                                match s.parse::<f64>() {
+                                    Ok(n) => Ok(Value::Float64(n)),
+                                    Err(_) => Ok(Value::Null),
+                                }
+                            } else {
+                                Err(Value::String("toFloat requires a string".to_string()))
+                            }
+                        }
+                        "contains" => {
+                            if args.len() < 2 {
+                                Err(Value::String("contains requires a string argument".to_string()))
+                            } else if let (Value::String(s), Value::String(substr)) = (&args[0], &args[1]) {
+                                Ok(Value::Bool(s.contains(substr)))
+                            } else {
+                                Err(Value::String("contains requires string arguments".to_string()))
+                            }
+                        }
+                        "startsWith" => {
+                            if args.len() < 2 {
+                                Err(Value::String("startsWith requires a string argument".to_string()))
+                            } else if let (Value::String(s), Value::String(prefix)) = (&args[0], &args[1]) {
+                                Ok(Value::Bool(s.starts_with(prefix)))
+                            } else {
+                                Err(Value::String("startsWith requires string arguments".to_string()))
+                            }
+                        }
+                        "endsWith" => {
+                            if args.len() < 2 {
+                                Err(Value::String("endsWith requires a string argument".to_string()))
+                            } else if let (Value::String(s), Value::String(suffix)) = (&args[0], &args[1]) {
+                                Ok(Value::Bool(s.ends_with(suffix)))
+                            } else {
+                                Err(Value::String("endsWith requires string arguments".to_string()))
+                            }
+                        }
+                        "substring" => {
+                            if args.len() < 3 {
+                                Err(Value::String("substring requires start and end arguments".to_string()))
+                            } else if let (Value::String(s), Value::Int64(start), Value::Int64(end)) = (&args[0], &args[1], &args[2]) {
+                                let start = *start as usize;
+                                let end = *end as usize;
+                                if start > s.len() || end > s.len() || start > end {
+                                    Err(Value::String("substring: invalid indices".to_string()))
+                                } else {
+                                    Ok(Value::String(s[start..end].to_string()))
+                                }
+                            } else {
+                                Err(Value::String("substring requires string and int arguments".to_string()))
+                            }
+                        }
+                        "toLower" => {
+                            if let Value::String(s) = &args[0] {
+                                Ok(Value::String(s.to_lowercase()))
+                            } else {
+                                Err(Value::String("toLower requires a string".to_string()))
+                            }
+                        }
+                        "toUpper" => {
+                            if let Value::String(s) = &args[0] {
+                                Ok(Value::String(s.to_uppercase()))
+                            } else {
+                                Err(Value::String("toUpper requires a string".to_string()))
+                            }
+                        }
+                        "replace" => {
+                            if args.len() < 3 {
+                                Err(Value::String("replace requires pattern and replacement arguments".to_string()))
+                            } else if let (Value::String(s), Value::String(pattern), Value::String(replacement)) = (&args[0], &args[1], &args[2]) {
+                                Ok(Value::String(s.replace(pattern, replacement)))
+                            } else {
+                                Err(Value::String("replace requires string arguments".to_string()))
+                            }
+                        }
+                        "split" => {
+                            if args.len() < 2 {
+                                Err(Value::String("split requires a delimiter argument".to_string()))
+                            } else if let (Value::String(s), Value::String(delimiter)) = (&args[0], &args[1]) {
+                                let elements: Vec<Value> = s.split(delimiter)
+                                    .map(|part| Value::String(part.to_string()))
+                                    .collect();
+                                Ok(Value::Array(Arc::new(Mutex::new(elements))))
+                            } else {
+                                Err(Value::String("split requires string arguments".to_string()))
+                            }
+                        }
+                        _ => Err(Value::String(format!("Method '{}' not found on str", name))),
+                    };
+                    self.set_reg(rd, result?);
+                // Check if this is an array method call
+                } else if let Some(Value::Array(_)) = args.first() {
+                    // Strip parameter signature from mangled name
+                    let base_name = if let Some(paren_pos) = name.find('(') {
+                        &name[..paren_pos]
+                    } else {
+                        &name
+                    };
+
+                    let result = match base_name {
+                        "length" => {
+                            if let Value::Array(arr) = &args[0] {
+                                let elements = arr.lock().unwrap();
+                                Ok(Value::Int64(elements.len() as i64))
+                            } else {
+                                Err(Value::String("length requires an array".to_string()))
+                            }
+                        }
+                        _ => Err(Value::String(format!("Method '{}' not found on Array", name))),
+                    };
+                    self.set_reg(rd, result?);
                 } else {
                     let instance = if let Some(Value::Instance(instance)) = args.first() {
                         instance.clone()
@@ -1422,6 +1678,7 @@ impl VM {
 
                     let class_name = instance.lock().unwrap().class.clone();
                     if let Some(class) = self.classes.get(&class_name).cloned() {
+                        // Exact match lookup for native methods
                         if let Some(native_method) = class.native_methods.get(&name) {
                             let mut method_args = args.clone();
                             let result = native_method(&mut method_args)?;
@@ -1431,74 +1688,158 @@ impl VM {
                             } else {
                                 self.set_reg(rd, result);
                             }
-                        } else if let Some(method) = class.methods.get(&name) {
-                            // Set up method call frame
-                            let caller_pc = self.pc();
-                            let caller_frame_base = self.frame_base();
-
-                            let new_frame_base = caller_frame_base + arg_start as usize + arg_count as usize;
-
-                            if new_frame_base + method.register_count as usize > self.registers.len() {
-                                return Err(Value::String("Register overflow in method call".to_string()));
-                            }
-
-                            let mut new_call_stack = self.call_stack.clone();
-                            if let Some(last_frame) = new_call_stack.last_mut() {
-                                last_frame.line_number = self.current_line;
-                            }
-                            new_call_stack.push(CallFrame::new(
-                                0,
-                                new_frame_base,
-                                arg_count,
-                                method.register_count,
-                                format!("{}.{}", class_name, name),
-                                self.source_file.clone(),
-                            ));
-                            self.call_stack = new_call_stack;
-
-                            // Copy arguments (first is self, placed in R1..Rn)
-                            for (i, arg) in args.iter().enumerate() {
-                                self.set_reg((i + 1) as u8, arg.clone());
-                            }
-
-                            let new_bytecode = method.bytecode.clone();
-                            let new_strings = self.strings.clone();
-                            let new_classes = self.classes.clone();
-                            let new_native_registry = self.native_registry.clone();
-
-                            let old_bytecode = std::mem::replace(&mut self.bytecode, new_bytecode);
-                            let old_strings = std::mem::replace(&mut self.strings, new_strings);
-                            let old_classes = std::mem::replace(&mut self.classes, new_classes);
-                            let old_native_registry = std::mem::replace(&mut self.native_registry, new_native_registry);
-
-                            let result = self.run().await;
-
-                            self.bytecode = old_bytecode;
-                            self.strings = old_strings;
-                            self.classes = old_classes;
-                            self.native_registry = old_native_registry;
-
-                            self.call_stack.pop();
-                            if let Some(frame) = self.call_stack.last_mut() {
-                                frame.pc = caller_pc;  // PC already points to next instruction
-                                frame.frame_base = caller_frame_base;
-                            }
-
-                            match result {
-                                Ok(RunResult::Finished(val)) => {
-                                    // For constructors, return the instance (self) instead of the method's return value
-                                    if name == "constructor" {
-                                        self.set_reg(rd, args.first().cloned().unwrap_or(Value::Null));
-                                    } else {
-                                        self.set_reg(rd, val.unwrap_or(Value::Null));
-                                    }
-                                },
-                                Ok(RunResult::Breakpoint) => return Ok(ExecutionResult::Breakpoint),
-                                Ok(RunResult::Awaiting(promise)) => return Ok(ExecutionResult::Awaiting(promise)),
-                                Err(e) => return Err(e),
-                            }
                         } else {
-                            return Err(Value::String(format!("Method '{}' not found on class '{}'", name, class_name)));
+                            // For bytecode methods, try exact match first, then generic type parameter matching
+                            let method_opt = class.methods.get(&name);
+                            
+                            // If not found, try to match with generic type parameters (T matches any type)
+                            let method_opt = method_opt.or_else(|| {
+                                let (base_name, requested_params) = if let Some(paren_pos) = name.find('(') {
+                                    let params_str = &name[paren_pos + 1..name.len() - 1];
+                                    (&name[..paren_pos], params_str.split(',').collect::<Vec<_>>())
+                                } else {
+                                    (&name[..], Vec::new())
+                                };
+                                
+                                // Find a method with same base name, same arg count, where each param is either
+                                // an exact match or a generic type parameter (single uppercase letter like T)
+                                class.methods.iter().find(|(k, _)| {
+                                    if let Some(paren_pos) = k.find('(') {
+                                        let k_base = &k[..paren_pos];
+                                        let k_params_str = &k[paren_pos + 1..k.len() - 1];
+                                        let k_params: Vec<&str> = k_params_str.split(',').collect();
+                                        
+                                        if k_base != base_name || k_params.len() != requested_params.len() {
+                                            return false;
+                                        }
+                                        
+                                        // Check each parameter - T matches anything
+                                        for (k_param, req_param) in k_params.iter().zip(requested_params.iter()) {
+                                            let is_generic = k_param.len() == 1 && k_param.chars().next().unwrap().is_uppercase();
+                                            if !is_generic && k_param != req_param {
+                                                return false;
+                                            }
+                                        }
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                }).map(|(_, v)| v)
+                            });
+                            
+                            if let Some(method) = method_opt {
+                                // Set up method call frame
+                                let caller_pc = self.pc();
+                                let caller_frame_base = self.frame_base();
+
+                                let new_frame_base = caller_frame_base + arg_start as usize + arg_count as usize;
+
+                                if new_frame_base + method.register_count as usize > self.registers.len() {
+                                    return Err(Value::String("Register overflow in method call".to_string()));
+                                }
+
+                                let mut new_call_stack = self.call_stack.clone();
+                                if let Some(last_frame) = new_call_stack.last_mut() {
+                                    last_frame.line_number = self.current_line;
+                                }
+                                new_call_stack.push(CallFrame::new(
+                                    0,
+                                    new_frame_base,
+                                    arg_count,
+                                    method.register_count,
+                                    format!("{}.{}", class_name, name),
+                                    self.source_file.clone(),
+                                ));
+                                self.call_stack = new_call_stack;
+
+                                // Copy arguments (first is self, placed in R1..Rn)
+                                for (i, arg) in args.iter().enumerate() {
+                                    self.set_reg((i + 1) as u8, arg.clone());
+                                }
+
+                                let new_bytecode = method.bytecode.clone();
+                                let new_strings = self.strings.clone();
+                                let new_classes = self.classes.clone();
+                                let new_native_registry = self.native_registry.clone();
+
+                                let old_bytecode = std::mem::replace(&mut self.bytecode, new_bytecode);
+                                let old_strings = std::mem::replace(&mut self.strings, new_strings);
+                                let old_classes = std::mem::replace(&mut self.classes, new_classes);
+                                let old_native_registry = std::mem::replace(&mut self.native_registry, new_native_registry);
+
+                                #[cfg(target_arch = "wasm32")]
+                                let result = Box::pin(self.run()).await;
+                                #[cfg(not(target_arch = "wasm32"))]
+                                let result = self.run().await;
+
+                                self.bytecode = old_bytecode;
+                                self.strings = old_strings;
+                                self.classes = old_classes;
+                                self.native_registry = old_native_registry;
+
+                                self.call_stack.pop();
+                                if let Some(frame) = self.call_stack.last_mut() {
+                                    frame.pc = caller_pc;  // PC already points to next instruction
+                                    frame.frame_base = caller_frame_base;
+                                }
+
+                                match result {
+                                    Ok(RunResult::Finished(val)) => {
+                                        // For constructors, return the instance (self) instead of the method's return value
+                                        if name == "constructor" {
+                                            self.set_reg(rd, args.first().cloned().unwrap_or(Value::Null));
+                                        } else {
+                                            self.set_reg(rd, val.unwrap_or(Value::Null));
+                                        }
+                                    },
+                                    Ok(RunResult::Breakpoint) => return Ok(ExecutionResult::Breakpoint),
+                                    Ok(RunResult::Awaiting(promise)) => return Ok(ExecutionResult::Awaiting(promise)),
+                                    Err(e) => return Err(e),
+                                }
+                            } else {
+                                // Method not found - provide helpful error with available methods
+                                let base_name = if let Some(paren_pos) = name.find('(') {
+                                    &name[..paren_pos]
+                                } else {
+                                    &name
+                                };
+
+                                // Collect available native methods with matching base name
+                                let mut available_native: Vec<&String> = class.native_methods.keys()
+                                    .filter(|k| {
+                                        if let Some(paren_pos) = k.find('(') {
+                                            &k[..paren_pos] == base_name
+                                        } else {
+                                            k.as_str() == base_name
+                                        }
+                                    })
+                                    .collect();
+
+                                // Collect available bytecode methods with matching base name
+                                let mut available_bytecode: Vec<&String> = class.methods.keys()
+                                    .filter(|k| {
+                                        if let Some(paren_pos) = k.find('(') {
+                                            &k[..paren_pos] == base_name
+                                        } else {
+                                            k.as_str() == base_name
+                                        }
+                                    })
+                                    .collect();
+
+                                if !available_native.is_empty() || !available_bytecode.is_empty() {
+                                    let mut available = Vec::new();
+                                    available_native.sort();
+                                    available_bytecode.sort();
+                                    available.extend(available_native.iter().map(|s| s.as_str()));
+                                    available.extend(available_bytecode.iter().map(|s| s.as_str()));
+                                    return Err(Value::String(format!(
+                                        "Method '{}' not found on class '{}'. Available methods: [{}]",
+                                        name, class_name, available.join(", ")
+                                    )));
+                                } else {
+                                    return Err(Value::String(format!("Method '{}' not found on class '{}'", name, class_name)));
+                                }
+                            }
                         }
                     } else {
                         return Err(Value::String(format!("Class '{}' not found", class_name)));
@@ -1507,8 +1848,9 @@ impl VM {
             }
 
             // Invoke interface method via vtable
-            // Format: [InvokeInterface, Rd, vtable_idx, arg_start, arg_count]
+            // Format: [InvokeInterface, Rd, method_idx, arg_start, arg_count]
             // First argument (arg_start) is the receiver (self)
+            // method_idx is the index into the class's vtable
             x if x == Opcode::InvokeInterface as u8 || x == Opcode::InvokeInterfaceAsync as u8 => {
                 self.set_pc(self.pc() + 1);
                 let rd = self.bytecode[self.pc()] as u8;
@@ -1519,10 +1861,6 @@ impl VM {
                 self.set_pc(self.pc() + 1);
                 let arg_count = self.bytecode[self.pc()] as u8;
                 self.set_pc(self.pc() + 1);  // Advance PC past all operands
-
-                let name = self.strings.get(method_idx)
-                    .ok_or_else(|| Value::String(format!("Invalid method index: {}", method_idx)))?
-                    .clone();
 
                 let mut args = Vec::new();
                 for i in 0..arg_count {
@@ -1536,11 +1874,30 @@ impl VM {
                 };
 
                 let class_name = instance.lock().unwrap().class.clone();
-                
+
                 // Look up the method through the vtable
                 if let Some(class) = self.classes.get(&class_name).cloned() {
-                    // First check if the class itself has the method
-                    if let Some(method) = class.methods.get(&name) {
+                    // Get the method name from the vtable by index
+                    let method_name = class.vtable.get(method_idx)
+                        .ok_or_else(|| Value::String(format!(
+                            "Vtable method index {} out of range for class '{}' (vtable size: {})",
+                            method_idx, class_name, class.vtable.len()
+                        )))?;
+
+                    // Look up the actual method by name (try different mangled variants)
+                    let method_opt = class.methods.get(method_name)
+                        .or_else(|| {
+                            // Try to find a method with matching base name
+                            class.methods.iter().find(|(k, _)| {
+                                if let Some(paren_pos) = k.find('(') {
+                                    &k[..paren_pos] == method_name
+                                } else {
+                                    k.as_str() == method_name
+                                }
+                            }).map(|(_, v)| v)
+                        });
+
+                    if let Some(method) = method_opt {
                         // Found the method in the class, invoke it
                         let caller_pc = self.pc();
                         let caller_frame_base = self.frame_base();
@@ -1560,7 +1917,7 @@ impl VM {
                             new_frame_base,
                             arg_count,
                             method.register_count,
-                            format!("{}.{}", class_name, name),
+                            format!("{}.{}", class_name, method_name),
                             self.source_file.clone(),
                         ));
                         self.call_stack = new_call_stack;
@@ -1579,6 +1936,9 @@ impl VM {
                         let old_classes = std::mem::replace(&mut self.classes, new_classes);
                         let old_native_registry = std::mem::replace(&mut self.native_registry, new_native_registry);
 
+                        #[cfg(target_arch = "wasm32")]
+                        let result = Box::pin(self.run()).await;
+                        #[cfg(not(target_arch = "wasm32"))]
                         let result = self.run().await;
 
                         self.bytecode = old_bytecode;
@@ -1595,7 +1955,7 @@ impl VM {
                         match result {
                             Ok(RunResult::Finished(val)) => {
                                 // For constructors, return the instance (self) instead of the method's return value
-                                if name == "constructor" {
+                                if method_name == "constructor" {
                                     self.set_reg(rd, args.first().cloned().unwrap_or(Value::Null));
                                 } else {
                                     self.set_reg(rd, val.unwrap_or(Value::Null));
@@ -1610,22 +1970,31 @@ impl VM {
                         let mut found = false;
                         let mut found_method = None;
                         let mut found_iface_name = None;
-                        
+
                         for iface_name in &class.parent_interfaces {
                             if let Some(iface) = self.classes.get(iface_name) {
-                                if let Some(method) = iface.methods.get(&name) {
-                                    found_method = Some(method.clone());
+                                // Try to find method with matching base name
+                                let method = iface.methods.iter().find(|(k, _)| {
+                                    if let Some(paren_pos) = k.find('(') {
+                                        &k[..paren_pos] == method_name
+                                    } else {
+                                        k.as_str() == method_name
+                                    }
+                                }).map(|(_, v)| v.clone());
+                                
+                                if let Some(m) = method {
+                                    found_method = Some(m);
                                     found_iface_name = Some(iface_name.clone());
                                     found = true;
                                     break;
                                 }
                             }
                         }
-                        
+
                         if found {
                             let method = found_method.unwrap();
                             let iface_name = found_iface_name.unwrap();
-                            
+
                             // Found in parent interface, use default implementation
                             let caller_pc = self.pc();
                             let caller_frame_base = self.frame_base();
@@ -1644,7 +2013,7 @@ impl VM {
                                 new_frame_base,
                                 arg_count,
                                 method.register_count,
-                                format!("{}.{}", iface_name, name),
+                                format!("{}.{}", iface_name, method_name),
                                 self.source_file.clone(),
                             ));
                             self.call_stack = new_call_stack;
@@ -1663,6 +2032,9 @@ impl VM {
                             let old_classes = std::mem::replace(&mut self.classes, new_classes);
                             let old_native_registry = std::mem::replace(&mut self.native_registry, new_native_registry);
 
+                            #[cfg(target_arch = "wasm32")]
+                            let result = Box::pin(self.run()).await;
+                            #[cfg(not(target_arch = "wasm32"))]
                             let result = self.run().await;
 
                             self.bytecode = old_bytecode;
@@ -1683,7 +2055,7 @@ impl VM {
                                 Err(e) => return Err(e),
                             }
                         } else {
-                            return Err(Value::String(format!("Interface method '{}' not found in class '{}' or its interfaces", name, class_name)));
+                            return Err(Value::String(format!("Interface method '{}' not found in class '{}' or its interfaces", method_name, class_name)));
                         }
                     }
                 } else {
@@ -1707,7 +2079,7 @@ impl VM {
                             match &mut *state {
                                 PromiseState::Pending => {
                                     drop(state);
-                                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                                    async_runtime::sleep(std::time::Duration::from_millis(10)).await;
                                 }
                                 PromiseState::Resolved(v) => {
                                     self.set_reg(rd, v.clone());
@@ -2439,14 +2811,14 @@ impl VM {
 pub enum RunResult {
     Finished(Option<Value>),
     Breakpoint,
-    Awaiting(Arc<TokioMutex<PromiseState>>),
+    Awaiting(Arc<AsyncMutex<PromiseState>>),
 }
 
 #[derive(Debug, Clone)]
 pub enum ExecutionResult {
     Continue,
     Breakpoint,
-    Awaiting(Arc<TokioMutex<PromiseState>>),
+    Awaiting(Arc<AsyncMutex<PromiseState>>),
 }
 
 impl Serialize for Value {
