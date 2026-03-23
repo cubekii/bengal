@@ -140,6 +140,7 @@ pub struct Method {
 pub struct Param {
     pub name: String,
     pub type_name: Option<String>,
+    pub default: Option<Expr>,
 }
 
 #[derive(Debug, Clone)]
@@ -768,6 +769,7 @@ impl Parser {
                 let field_params: Vec<Param> = fields.iter().map(|field| Param {
                     name: field.name.clone(),
                     type_name: Some(field.type_name.clone()),
+                    default: field.default.clone(),
                 }).collect();
                 final_methods.push(Method {
                     name: "constructor".to_string(),
@@ -1230,7 +1232,13 @@ impl Parser {
                 t_name = t_name + "?";
             }
 
-            params.push(Param { name, type_name: Some(t_name) });
+            let default = if self.match_token(&Token::Equal) {
+                Some(self.parse_expression()?)
+            } else {
+                None
+            };
+
+            params.push(Param { name, type_name: Some(t_name), default });
 
             if !self.match_token(&Token::Comma) {
                 break;
@@ -1305,7 +1313,7 @@ impl Parser {
     }
 
     fn parse_function_type(&mut self) -> Result<(String, bool), String> {
-        // Parse function type: (param_types) -> return_type
+        // Parse function type: (param_types) -> return_type  or  (param_types) for void return
         let mut type_str = String::from("(");
 
         if !self.match_token(&Token::LParen) {
@@ -1334,19 +1342,18 @@ impl Parser {
         }
         type_str.push(')');
 
-        // Parse return type
+        // Parse optional return type
         self.skip_newlines();
-        if !self.match_token(&Token::Arrow) {
-            return self.error_generic("Expected '->' in function type");
+        if self.match_token(&Token::Arrow) {
+            self.skip_newlines();
+            let (return_type, optional) = self.parse_type()?;
+            type_str.push_str(" -> ");
+            type_str.push_str(&return_type);
+            Ok((type_str, optional))
+        } else {
+            // No return type specified - function returns nothing (void)
+            Ok((type_str, false))
         }
-        self.skip_newlines();
-
-        let (return_type, optional) = self.parse_type()?;
-
-        type_str.push_str(" -> ");
-        type_str.push_str(&return_type);
-
-        Ok((type_str, optional))
     }
 
     fn parse_let(&mut self, is_private: bool) -> Result<Stmt, String> {

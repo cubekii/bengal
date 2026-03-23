@@ -327,6 +327,9 @@ impl ModuleResolver {
         self.register_native_functions();
 
         // Now type check all loaded modules (skip function registration since they're already registered with qualified names)
+        // Track errors from modules separately - don't merge them into the main context
+        let mut module_errors: HashMap<String, Vec<(String, usize, usize)>> = HashMap::new();
+        
         for (module_name, statements) in &module_statements {
             if self.enable_type_checking {
                 let mut ctx = self.type_context.clone();
@@ -334,17 +337,54 @@ impl ModuleResolver {
                 let mut type_checker = TypeChecker::with_context(ctx);
                 let _ = type_checker.check_with_options(statements, true);
 
-                // Log errors but continue
+                // Collect errors but don't merge them - we'll report them with proper file info
                 if type_checker.get_context().has_errors() {
                     for error in type_checker.get_context().get_errors() {
-                        eprintln!("Type error in module '{}': {}", module_name, error.message);
+                        module_errors
+                            .entry(module_name.clone())
+                            .or_insert_with(Vec::new)
+                            .push((error.message.clone(), error.line, error.column));
                     }
                 }
 
-                // Merge the context back (including errors)
-                self.type_context = type_checker.get_context().clone();
+                // Merge the context back but NOT the errors (errors are reported separately)
+                let mut new_ctx = type_checker.get_context().clone();
+                new_ctx.errors = self.type_context.errors.clone();
+                self.type_context = new_ctx;
             }
         }
+
+        // Report all module errors with proper file paths
+        for (module_name, errors) in &module_errors {
+            if let Some(module_info) = self.loaded_modules.get(module_name) {
+                let module_path = module_info.path.to_string_lossy().to_string();
+                let source_lines: Vec<&str> = module_info.source.lines().collect();
+                
+                for (message, line, column) in errors {
+                    let source_line = if *line > 0 && *line <= source_lines.len() {
+                        source_lines[*line - 1]
+                    } else {
+                        ""
+                    };
+                    eprintln!("{}:{}:{}: error: {}", module_path, line, column, message);
+                    if !source_line.is_empty() {
+                        eprintln!("  {}", source_line);
+                        let caret_pos = column.saturating_sub(1);
+                        let caret_line: String = " ".repeat(caret_pos) + "^";
+                        eprintln!("  {}", caret_line);
+                    }
+                }
+            }
+        }
+
+        // If there were module errors, fail compilation
+        if !module_errors.is_empty() {
+            let total_errors: usize = module_errors.values().map(|v| v.len()).sum();
+            return Err(format!("{} error(s) in imported modules", total_errors));
+        }
+
+        // Register main file's functions before type checking
+        self.register_module_types("", main_statements);
 
         // Type check main statements
         let mut ctx = self.type_context.clone();
@@ -436,11 +476,11 @@ impl ModuleResolver {
                     let params: Vec<ParamSignature> = func.params.iter().map(|p| ParamSignature {
                         name: p.name.clone(),
                         type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
+                        default: p.default.is_some(),
                     }).collect();
 
-                    let full_name = format!("{}.{}", module_name, func.name);
                     let sig = FunctionSignature {
-                        name: full_name.clone(),
+                        name: func.name.clone(),
                         params,
                         return_type: func.return_type.as_ref().map(|t| Type::from_str(t)),
                         return_optional: func.return_optional,
@@ -451,11 +491,20 @@ impl ModuleResolver {
                         mangled_name: None,
                     };
 
-                    self.type_context.add_function(&full_name, sig.clone());
+                    // Register with qualified name if module_name is not empty
+                    if !module_name.is_empty() {
+                        let full_name = format!("{}.{}", module_name, func.name);
+                        let mut sig_with_qual = sig.clone();
+                        sig_with_qual.name = full_name.clone();
+                        self.type_context.add_function(&full_name, sig_with_qual);
+                    } else {
+                        // For main file (empty module name), register without qualification
+                        self.type_context.add_function(&func.name, sig.clone());
+                    }
 
                     // Also add unqualified version for public functions in the current module
                     // (not for imported modules, to avoid name conflicts)
-                    if !func.private {
+                    if !func.private && !module_name.is_empty() {
                         let is_current_module = self.type_context.current_module.as_ref()
                             .map(|m| m == &module_name)
                             .unwrap_or(false);
@@ -485,11 +534,18 @@ impl ModuleResolver {
     }
 
     fn register_class_with_module(&mut self, module_name: &str, class: &crate::parser::ClassDef) {
-        let mut class_with_module = class.clone();
-        class_with_module.name = format!("{}.{}", module_name, class.name);
-        self.type_context.add_class(&class_with_module);
-        // Only add unqualified version for public classes
-        if !class.private {
+        // Only add qualified name if module_name is not empty
+        if !module_name.is_empty() {
+            let mut class_with_module = class.clone();
+            class_with_module.name = format!("{}.{}", module_name, class.name);
+            self.type_context.add_class(&class_with_module);
+        }
+        
+        // Always add unqualified version for classes in main file
+        if module_name.is_empty() {
+            self.type_context.add_class(class);
+        } else if !class.private {
+            // For imported modules, only add unqualified version for public classes
             self.type_context.add_class(class);
         }
 
@@ -613,6 +669,7 @@ impl ModuleResolver {
             params: vec![ParamSignature {
                 name: "x".to_string(),
                 type_name: Some(Type::Float),
+                default: false,
             }],
             return_type: Some(Type::Float),
             return_optional: false,
@@ -627,6 +684,7 @@ impl ModuleResolver {
             params: vec![ParamSignature {
                 name: "x".to_string(),
                 type_name: Some(Type::Float),
+                default: false,
             }],
             return_type: Some(Type::Float),
             return_optional: false,
@@ -641,6 +699,7 @@ impl ModuleResolver {
             params: vec![ParamSignature {
                 name: "x".to_string(),
                 type_name: Some(Type::Float),
+                default: false,
             }],
             return_type: Some(Type::Float),
             return_optional: false,
@@ -655,6 +714,7 @@ impl ModuleResolver {
             params: vec![ParamSignature {
                 name: "x".to_string(),
                 type_name: Some(Type::Float),
+                default: false,
             }],
             return_type: Some(Type::Float),
             return_optional: false,
@@ -669,9 +729,11 @@ impl ModuleResolver {
             params: vec![ParamSignature {
                 name: "a".to_string(),
                 type_name: Some(Type::Float),
+                default: false,
             }, ParamSignature {
                 name: "b".to_string(),
                 type_name: Some(Type::Float),
+                default: false,
             }],
             return_type: Some(Type::Float),
             return_optional: false,
@@ -686,9 +748,11 @@ impl ModuleResolver {
             params: vec![ParamSignature {
                 name: "a".to_string(),
                 type_name: Some(Type::Float),
+                default: false,
             }, ParamSignature {
                 name: "b".to_string(),
                 type_name: Some(Type::Float),
+                default: false,
             }],
             return_type: Some(Type::Float),
             return_optional: false,
@@ -705,6 +769,7 @@ impl ModuleResolver {
             params: vec![ParamSignature {
                 name: "message".to_string(),
                 type_name: Some(Type::Str),
+                default: false,
             }],
             return_type: None,
             return_optional: false,
@@ -730,6 +795,7 @@ impl ModuleResolver {
             params: vec![ParamSignature {
                 name: "name".to_string(),
                 type_name: Some(Type::Str),
+                default: false,
             }],
             return_type: None,
             return_optional: false,
@@ -742,8 +808,8 @@ impl ModuleResolver {
         self.type_context.add_function("std.test.assertSame", FunctionSignature {
             name: "std.test.assertSame".to_string(),
             params: vec![
-                ParamSignature { name: "expected".to_string(), type_name: Some(Type::Any) },
-                ParamSignature { name: "actual".to_string(), type_name: Some(Type::Any) },
+                ParamSignature { name: "expected".to_string(), type_name: Some(Type::Any), default: false },
+                ParamSignature { name: "actual".to_string(), type_name: Some(Type::Any), default: false },
             ],
             return_type: Some(Type::Bool),
             return_optional: false,

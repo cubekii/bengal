@@ -653,6 +653,10 @@ pub struct Compiler {
     pub search_paths: Vec<String>,
     /// Stack of scopes, each containing variables declared in that scope
     scope_stack: Vec<Vec<String>>,
+    /// Store default expressions for constructor parameters by class name
+    constructor_defaults: std::collections::HashMap<String, Vec<Option<crate::parser::Expr>>>,
+    /// Store default expressions for function parameters by function name
+    function_defaults: std::collections::HashMap<String, Vec<Option<crate::parser::Expr>>>,
 }
 
 pub struct CompilerOptions {
@@ -685,6 +689,8 @@ impl Default for Compiler {
             enable_type_checking: false,
             search_paths: vec!["std".to_string()],
             scope_stack: Vec::new(),
+            constructor_defaults: std::collections::HashMap::new(),
+            function_defaults: std::collections::HashMap::new(),
         }
     }
 }
@@ -703,6 +709,8 @@ impl Compiler {
             enable_type_checking: false,
             search_paths: vec!["std".to_string()],
             scope_stack: Vec::new(),
+            constructor_defaults: std::collections::HashMap::new(),
+            function_defaults: std::collections::HashMap::new(),
         }
     }
 
@@ -719,6 +727,8 @@ impl Compiler {
             enable_type_checking: false,
             search_paths: vec!["std".to_string()],
             scope_stack: Vec::new(),
+            constructor_defaults: std::collections::HashMap::new(),
+            function_defaults: std::collections::HashMap::new(),
         }
     }
 
@@ -735,6 +745,8 @@ impl Compiler {
             enable_type_checking: false,
             search_paths: vec!["std".to_string()],
             scope_stack: Vec::new(),
+            constructor_defaults: std::collections::HashMap::new(),
+            function_defaults: std::collections::HashMap::new(),
         }
     }
 
@@ -751,6 +763,8 @@ impl Compiler {
             enable_type_checking: false,
             search_paths: vec!["std".to_string()],
             scope_stack: Vec::new(),
+            constructor_defaults: std::collections::HashMap::new(),
+            function_defaults: std::collections::HashMap::new(),
         }
     }
 
@@ -878,6 +892,13 @@ impl Compiler {
                     classes.push(interface_as_class);
                 }
                 Stmt::Function(func) => {
+                    // Store function default expressions for call site injection
+                    if !func.params.is_empty() {
+                        let defaults: Vec<Option<crate::parser::Expr>> = func.params.iter()
+                            .map(|p| p.default.clone())
+                            .collect();
+                        self.function_defaults.insert(func.name.clone(), defaults);
+                    }
                     functions.push(func.clone());
                 }
                 _ => {}
@@ -913,6 +934,14 @@ impl Compiler {
             let class_source_file = class_source_files.get(&c.name).cloned().or_else(|| self._source_path.clone());
 
             for method in &c.methods {
+                // Store constructor default expressions for call site injection
+                if method.name == "constructor" && !method.params.is_empty() {
+                    let defaults: Vec<Option<crate::parser::Expr>> = method.params.iter()
+                        .map(|p| p.default.clone())
+                        .collect();
+                    self.constructor_defaults.insert(c.name.clone(), defaults);
+                }
+
                 let mut method_bytecode = Vec::new();
                 // Use global strings table directly to avoid index adjustment issues
 
@@ -1047,14 +1076,15 @@ impl Compiler {
 
                 // No string index adjustment needed - we used the global strings table directly
 
-                // Generate mangled name for method overloading support based on argument count
+                // Generate mangled name for method overloading support based on parameter types
                 let mangled_name = if method.params.is_empty() {
                     format!("{}()", method.name)
                 } else {
-                    // Build a mangled name with placeholder types based on param count
+                    // Build a mangled name with actual parameter types
                     let mut params = Vec::new();
-                    for _ in 0..method.params.len() {
-                        params.push("T".to_string());
+                    for param in &method.params {
+                        let param_type = param.type_name.as_ref().map(|t| t.clone()).unwrap_or_else(|| "T".to_string());
+                        params.push(param_type);
                     }
                     format!("{}({})", method.name, params.join(","))
                 };
@@ -1066,7 +1096,7 @@ impl Compiler {
                 }
 
                 vm_methods.insert(mangled_name.clone(), Method {
-                    name: mangled_name,
+                    name: mangled_name.clone(),
                     bytecode: method_bytecode,
                     register_count,
                 });
@@ -2980,12 +3010,21 @@ impl Compiler {
                         } else { true };
 
                         if has_constructor {
-                            let contiguous_start = self.current_ctx.allocate_regs(args.len() + 1);
+                            // Find the constructor with full parameters to get default values
+                            let constructor_params = self.constructor_defaults.get(&resolved_name)
+                                .cloned()
+                                .unwrap_or_default();
+
+                            // Calculate total args needed (provided + defaults)
+                            let total_args = std::cmp::max(args.len(), constructor_params.len());
+                            
+                            let contiguous_start = self.current_ctx.allocate_regs(total_args + 1);
                             // First arg for Invoke is the object (self)
                             bytecode.push(Opcode::Move as u8);
                             bytecode.push(contiguous_start as u8);
                             bytecode.push(rd as u8);
 
+                            // Copy provided arguments
                             for (i, &r) in arg_regs.iter().enumerate() {
                                 let r_arg = contiguous_start + 1 + i;
                                 bytecode.push(Opcode::Move as u8);
@@ -2993,16 +3032,40 @@ impl Compiler {
                                 bytecode.push(r as u8);
                             }
 
-                            // Generate mangled constructor name based on argument count
-                            // For empty constructor: "constructor()"
-                            // For constructor with args: "constructor(T1,T2,...)"
-                            let mangled_ctor = if args.is_empty() {
+                            // Compute default values for missing arguments
+                            for i in args.len()..total_args {
+                                if i < constructor_params.len() {
+                                    if let Some(ref default_expr) = constructor_params[i] {
+                                        let r_arg = contiguous_start + 1 + i;
+                                        let r_val = self.compile_expr(default_expr, bytecode, strings, classes, type_context)?;
+                                        bytecode.push(Opcode::Move as u8);
+                                        bytecode.push(r_arg as u8);
+                                        bytecode.push(r_val as u8);
+                                    }
+                                }
+                            }
+
+                            // Generate mangled constructor name based on ALL argument types (including defaults)
+                            let mangled_ctor = if total_args == 0 {
                                 "constructor()".to_string()
                             } else {
-                                // Build a mangled name with placeholder types based on arg count
                                 let mut params = Vec::new();
-                                for _ in 0..args.len() {
-                                    params.push("T".to_string());
+                                let default_ctx = TypeContext::new();
+                                let ctx = type_context.as_ref().map_or(&default_ctx, |v| v);
+                                for i in 0..total_args {
+                                    let arg_type = if i < args.len() {
+                                        self.infer_expr_type(&args[i], ctx)
+                                    } else if i < constructor_params.len() {
+                                        // Infer type from default expression
+                                        if let Some(ref default_expr) = constructor_params[i] {
+                                            Type::from_str(&self.infer_expr_type(default_expr, ctx).to_str())
+                                        } else {
+                                            Type::Unknown
+                                        }
+                                    } else {
+                                        Type::Unknown
+                                    };
+                                    params.push(arg_type.to_str());
                                 }
                                 format!("constructor({})", params.join(","))
                             };
@@ -3013,7 +3076,7 @@ impl Compiler {
                             bytecode.push(r_unused as u8);
                             bytecode.push(constructor_idx as u8);
                             bytecode.push(contiguous_start as u8);
-                            bytecode.push((args.len() + 1) as u8);
+                            bytecode.push((total_args + 1) as u8);
                         }
                     } else if is_method {
                         // Method call on implicit 'self'
@@ -3088,13 +3151,38 @@ impl Compiler {
                             bytecode.push((args.len() + 1) as u8);
                         }
                     } else {
-                        // Regular function call
-                        let contiguous_start = self.current_ctx.allocate_regs(args.len());
+                        // Regular function call - handle default parameters
+                        // Get default expressions for this function - try both base name and mangled name
+                        let base_func_name = resolved_name.split('(').next().unwrap_or(&resolved_name);
+                        let function_params = self.function_defaults.get(base_func_name)
+                            .or_else(|| self.function_defaults.get(&resolved_name))
+                            .cloned()
+                            .unwrap_or_default();
+
+                        // Calculate total args needed (provided + defaults)
+                        let total_args = std::cmp::max(args.len(), function_params.len());
+                        
+                        let contiguous_start = self.current_ctx.allocate_regs(total_args);
+                        
+                        // Copy provided arguments
                         for (i, &r) in arg_regs.iter().enumerate() {
                             let r_arg = contiguous_start + i;
                             bytecode.push(Opcode::Move as u8);
                             bytecode.push(r_arg as u8);
                             bytecode.push(r as u8);
+                        }
+
+                        // Compute default values for missing arguments
+                        for i in args.len()..total_args {
+                            if i < function_params.len() {
+                                if let Some(ref default_expr) = function_params[i] {
+                                    let r_arg = contiguous_start + i;
+                                    let r_val = self.compile_expr(default_expr, bytecode, strings, classes, type_context)?;
+                                    bytecode.push(Opcode::Move as u8);
+                                    bytecode.push(r_arg as u8);
+                                    bytecode.push(r_val as u8);
+                                }
+                            }
                         }
 
                         // For native functions, use the resolved name (which includes module prefix for imports)
@@ -3107,13 +3195,13 @@ impl Compiler {
                             bytecode.push(rd as u8);
                             bytecode.push(idx as u8);
                             bytecode.push(contiguous_start as u8);
-                            bytecode.push(args.len() as u8);
+                            bytecode.push(total_args as u8);
                         } else {
                             bytecode.push(Opcode::Call as u8);
                             bytecode.push(rd as u8);
                             bytecode.push(idx as u8);
                             bytecode.push(contiguous_start as u8);
-                            bytecode.push(args.len() as u8);
+                            bytecode.push(total_args as u8);
                         }
                     }
                 } else if let Expr::Get { object, name, .. } = callee.as_ref() {

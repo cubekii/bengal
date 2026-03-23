@@ -57,12 +57,13 @@ impl Type {
             return Type::Optional(Box::new(Type::from_str(inner)));
         }
 
-        // Handle function types: (param_types) -> return_type
+        // Handle function types: (param_types) -> return_type  or  (param_types) for void return
         if s.starts_with('(') {
-            if let Some(arrow_pos) = s.find(") -> ") {
-                let params_str = &s[1..arrow_pos];
-                let return_str = &s[arrow_pos + 4..];
-
+            // First find the closing paren
+            if let Some(paren_end) = s.find(')') {
+                let params_str = &s[1..paren_end];
+                let rest = &s[paren_end + 1..];
+                
                 let param_types: Vec<Type> = if params_str.trim().is_empty() {
                     Vec::new()
                 } else {
@@ -71,8 +72,16 @@ impl Type {
                         .collect()
                 };
 
-                let return_type = Box::new(Type::from_str(return_str.trim()));
-                return Type::Function(param_types, return_type);
+                // Check if there's a return type
+                let rest_trimmed = rest.trim();
+                if rest_trimmed.starts_with("-> ") || rest_trimmed.starts_with("->") {
+                    let return_str = rest_trimmed.trim_start_matches("->").trim();
+                    let return_type = Box::new(Type::from_str(return_str.trim()));
+                    return Type::Function(param_types, return_type);
+                } else {
+                    // No return type - function returns nothing (void)
+                    return Type::Function(param_types, Box::new(Type::Null));
+                }
             }
         }
 
@@ -184,7 +193,64 @@ impl Type {
             }
             Type::Function(params, return_type) => {
                 let params_str: Vec<String> = params.iter().map(|p| p.to_str()).collect();
-                format!("({}) -> {}", params_str.join(", "), return_type.to_str())
+                if matches!(return_type.as_ref(), Type::Null) {
+                    // No return type (void) - just show parameters
+                    format!("({})", params_str.join(", "))
+                } else {
+                    format!("({}) -> {}", params_str.join(", "), return_type.to_str())
+                }
+            }
+            Type::SelfType => "self".to_string(),
+            Type::Any => "any".to_string(),
+        }
+    }
+
+    /// Convert type to string for mangling purposes (flattens generic arguments)
+    /// Format: ClassName<T,B> becomes ClassName(T,B) for use in function mangling
+    /// Type parameters (T, U, etc.) and Unknown are represented as * for generic functions
+    pub fn to_mangle_str(&self) -> String {
+        match self {
+            Type::Int => "int".to_string(),
+            Type::Float => "float".to_string(),
+            Type::Str => "str".to_string(),
+            Type::Bool => "bool".to_string(),
+            Type::Int8 => "int8".to_string(),
+            Type::UInt8 => "uint8".to_string(),
+            Type::Int16 => "int16".to_string(),
+            Type::UInt16 => "uint16".to_string(),
+            Type::Int32 => "int32".to_string(),
+            Type::UInt32 => "uint32".to_string(),
+            Type::Int64 => "int64".to_string(),
+            Type::UInt64 => "uint64".to_string(),
+            Type::Float32 => "float32".to_string(),
+            Type::Float64 => "float64".to_string(),
+            Type::Class(name) => name.clone(),
+            Type::Enum(name) => name.clone(),
+            Type::Optional(t) => format!("{}?", t.to_mangle_str()),
+            Type::Array(t) => format!("{}[]", t.to_mangle_str()),
+            Type::Null => "null".to_string(),
+            Type::Unknown => "*".to_string(),  // Unknown type -> *
+            Type::TypeParameter(_) => "*".to_string(),  // Generic type parameter -> *
+            Type::GenericInstance(name, args) => {
+                let args_str: Vec<String> = args.iter().map(|a| a.to_mangle_str()).collect();
+                format!("{}({})", name, args_str.join(","))
+            }
+            Type::TypeAlias(name, args) => {
+                if args.is_empty() {
+                    name.clone()
+                } else {
+                    let args_str: Vec<String> = args.iter().map(|a| a.to_mangle_str()).collect();
+                    format!("{}({})", name, args_str.join(","))
+                }
+            }
+            Type::Function(params, return_type) => {
+                let params_str: Vec<String> = params.iter().map(|p| p.to_mangle_str()).collect();
+                if matches!(return_type.as_ref(), Type::Null) {
+                    // No return type (void) - just show parameters
+                    format!("({})", params_str.join(","))
+                } else {
+                    format!("({}) -> {}", params_str.join(","), return_type.to_mangle_str())
+                }
             }
             Type::SelfType => "self".to_string(),
             Type::Any => "any".to_string(),
@@ -277,6 +343,7 @@ pub struct FunctionSignature {
 pub struct ParamSignature {
     pub name: String,
     pub type_name: Option<Type>,
+    pub default: bool,  // true if this parameter has a default value
 }
 
 /// Generate a mangled name for a function based on its parameter types
@@ -286,14 +353,14 @@ pub fn mangle_function_name(name: &str, param_types: &[Type]) -> String {
     let mut mangled = String::new();
     mangled.push_str(name);
     mangled.push('(');
-    
+
     for (i, ty) in param_types.iter().enumerate() {
         if i > 0 {
             mangled.push(',');
         }
-        mangled.push_str(&ty.to_str());
+        mangled.push_str(&ty.to_mangle_str());
     }
-    
+
     mangled.push(')');
     mangled
 }
@@ -470,6 +537,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Str),
             return_optional: false,
@@ -486,6 +554,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "json".to_string(),
                 type_name: Some(Type::Str),
+                default: false,
             }],
             return_type: Some(Type::Unknown),
             return_optional: false,
@@ -505,6 +574,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Str),
             return_optional: false,
@@ -521,6 +591,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Str),
             return_optional: true,
@@ -537,6 +608,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Unknown),
             return_optional: true,
@@ -580,7 +652,7 @@ impl TypeContext {
         });
         str_methods.insert("split(str)".to_string(), MethodSignature {
             name: "split".to_string(),
-            params: vec![ParamSignature { name: "delimiter".to_string(), type_name: Some(Type::Str) }],
+            params: vec![ParamSignature { name: "delimiter".to_string(), type_name: Some(Type::Str), default: false }],
             return_type: Some(Type::Array(Box::new(Type::Str))),
             return_optional: false,
             private: false,
@@ -613,7 +685,7 @@ impl TypeContext {
         });
         str_methods.insert("contains(str)".to_string(), MethodSignature {
             name: "contains".to_string(),
-            params: vec![ParamSignature { name: "substr".to_string(), type_name: Some(Type::Str) }],
+            params: vec![ParamSignature { name: "substr".to_string(), type_name: Some(Type::Str), default: false }],
             return_type: Some(Type::Bool),
             return_optional: false,
             private: false,
@@ -624,7 +696,7 @@ impl TypeContext {
         });
         str_methods.insert("startsWith(str)".to_string(), MethodSignature {
             name: "startsWith".to_string(),
-            params: vec![ParamSignature { name: "prefix".to_string(), type_name: Some(Type::Str) }],
+            params: vec![ParamSignature { name: "prefix".to_string(), type_name: Some(Type::Str), default: false }],
             return_type: Some(Type::Bool),
             return_optional: false,
             private: false,
@@ -635,7 +707,7 @@ impl TypeContext {
         });
         str_methods.insert("endsWith(str)".to_string(), MethodSignature {
             name: "endsWith".to_string(),
-            params: vec![ParamSignature { name: "suffix".to_string(), type_name: Some(Type::Str) }],
+            params: vec![ParamSignature { name: "suffix".to_string(), type_name: Some(Type::Str), default: false }],
             return_type: Some(Type::Bool),
             return_optional: false,
             private: false,
@@ -647,8 +719,8 @@ impl TypeContext {
         str_methods.insert("substring(int,int)".to_string(), MethodSignature {
             name: "substring".to_string(),
             params: vec![
-                ParamSignature { name: "start".to_string(), type_name: Some(Type::Int) },
-                ParamSignature { name: "end".to_string(), type_name: Some(Type::Int) },
+                ParamSignature { name: "start".to_string(), type_name: Some(Type::Int), default: false },
+                ParamSignature { name: "end".to_string(), type_name: Some(Type::Int), default: false },
             ],
             return_type: Some(Type::Str),
             return_optional: false,
@@ -696,7 +768,7 @@ impl TypeContext {
         });
         array_methods.insert("add(Unknown)".to_string(), MethodSignature {
             name: "add".to_string(),
-            params: vec![ParamSignature { name: "element".to_string(), type_name: Some(Type::Unknown) }],
+            params: vec![ParamSignature { name: "element".to_string(), type_name: Some(Type::Unknown), default: false }],
             return_type: None,
             return_optional: false,
             private: false,
@@ -727,6 +799,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Str),
             return_optional: false,
@@ -744,6 +817,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Int),
             return_optional: false,
@@ -761,6 +835,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Float),
             return_optional: false,
@@ -778,6 +853,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Bool),
             return_optional: false,
@@ -795,6 +871,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Int8),
             return_optional: false,
@@ -812,6 +889,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::UInt8),
             return_optional: false,
@@ -829,6 +907,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Int16),
             return_optional: false,
@@ -846,6 +925,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::UInt16),
             return_optional: false,
@@ -863,6 +943,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Int32),
             return_optional: false,
@@ -880,6 +961,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::UInt32),
             return_optional: false,
@@ -897,6 +979,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Int64),
             return_optional: false,
@@ -914,6 +997,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::UInt64),
             return_optional: false,
@@ -931,6 +1015,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Float32),
             return_optional: false,
@@ -948,6 +1033,7 @@ impl TypeContext {
             params: vec![ParamSignature {
                 name: "value".to_string(),
                 type_name: Some(Type::Unknown),
+                default: false,
             }],
             return_type: Some(Type::Float64),
             return_optional: false,
@@ -982,6 +1068,7 @@ impl TypeContext {
             let params: Vec<ParamSignature> = method.params.iter().map(|p| ParamSignature {
                 name: p.name.clone(),
                 type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
+                default: false,
             }).collect();
 
             // Generate mangled name for the method
@@ -1030,6 +1117,7 @@ impl TypeContext {
                 let field_params: Vec<ParamSignature> = class.fields.iter().map(|field| ParamSignature {
                     name: field.name.clone(),
                     type_name: Some(Type::from_str(&field.type_name)),
+                    default: false,
                 }).collect();
                 let field_param_types: Vec<Type> = field_params.iter()
                     .filter_map(|p| p.type_name.clone())
@@ -1079,6 +1167,7 @@ impl TypeContext {
             let params: Vec<ParamSignature> = method.params.iter().map(|p| ParamSignature {
                 name: p.name.clone(),
                 type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
+                default: false,
             }).collect();
 
             // Generate mangled name for the method
@@ -1877,8 +1966,15 @@ impl TypeContext {
 
     /// Check if a function signature matches the given argument types
     fn signature_matches(&self, sig: &FunctionSignature, arg_types: &[Type]) -> bool {
-        if sig.params.len() != arg_types.len() {
-            return false;
+        // Allow calling with fewer arguments if remaining params have defaults
+        if arg_types.len() > sig.params.len() {
+            return false; // Too many arguments
+        }
+        
+        // Check if we have enough params (including defaults) for the provided args
+        let min_args = sig.params.iter().position(|p| p.default).unwrap_or(sig.params.len());
+        if arg_types.len() < min_args {
+            return false; // Not enough arguments (before first default)
         }
 
         for (param, arg_type) in sig.params.iter().zip(arg_types.iter()) {
@@ -2321,6 +2417,32 @@ impl TypeChecker {
         &mut self.context
     }
 
+    /// Get span information from an expression for error reporting
+    fn get_expr_span(expr: &Expr) -> (usize, usize) {
+        match expr {
+            Expr::Literal(lit) => match lit {
+                Literal::String(_, span) => (span.line, span.column),
+                Literal::Int(_, span) => (span.line, span.column),
+                Literal::Float(_, span) => (span.line, span.column),
+                Literal::Bool(_, span) => (span.line, span.column),
+                Literal::Null(span) => (span.line, span.column),
+            },
+            Expr::Variable { span, .. } => (span.line, span.column),
+            Expr::Binary { span, .. } => (span.line, span.column),
+            Expr::Unary { span, .. } => (span.line, span.column),
+            Expr::Call { span, .. } => (span.line, span.column),
+            Expr::Get { span, .. } => (span.line, span.column),
+            Expr::Set { span, .. } => (span.line, span.column),
+            Expr::Interpolated { span, .. } => (span.line, span.column),
+            Expr::Range { span, .. } => (span.line, span.column),
+            Expr::Cast { span, .. } => (span.line, span.column),
+            Expr::Array { span, .. } => (span.line, span.column),
+            Expr::Index { span, .. } => (span.line, span.column),
+            Expr::ObjectLiteral { span, .. } => (span.line, span.column),
+            Expr::Lambda { span, .. } => (span.line, span.column),
+        }
+    }
+
     fn collect_definitions(&mut self, statements: &[Stmt], skip_functions: bool) {
         for stmt in statements {
             match stmt {
@@ -2341,6 +2463,7 @@ impl TypeChecker {
                         let params: Vec<ParamSignature> = func.params.iter().map(|p| ParamSignature {
                             name: p.name.clone(),
                             type_name: p.type_name.as_ref().map(|t| Type::from_str(t)),
+                            default: p.default.is_some(),
                         }).collect();
 
                         self.context.add_function(&func.name, FunctionSignature {
@@ -2446,14 +2569,17 @@ impl TypeChecker {
                     let deduced_type = self.infer_expr_with_expected_type(expr, &Some(expected_type.clone()));
 
                     if !deduced_type.is_assignable_to(&expected_type) {
-                        self.context.add_error(
+                        self.context.add_error_with_location(
                             format!(
                                 "Type mismatch: cannot assign {} to variable '{}' of type {}",
                                 deduced_type.to_str(),
                                 name,
                                 expected_type.to_str()
                             ),
-                            0
+                            span.line,
+                            span.column,
+                            None,
+                            None,
                         );
                     }
                 } else if let Some(current_class) = &self.context.current_class {
@@ -2560,26 +2686,32 @@ impl TypeChecker {
                 };
 
                 if !var_type.is_numeric() {
-                    self.context.add_error(
+                    self.context.add_error_with_location(
                         format!(
                             "Cannot use '{}' operator on non-numeric type '{}'",
                             op_name,
                             var_type.to_str()
                         ),
-                        0
+                        span.line,
+                        span.column,
+                        None,
+                        None,
                     );
                 } else if !expr_type.is_numeric() {
-                    self.context.add_error(
+                    self.context.add_error_with_location(
                         format!(
                             "Cannot use '{}' operator with non-numeric type '{}'",
                             op_name,
                             expr_type.to_str()
                         ),
-                        0
+                        span.line,
+                        span.column,
+                        None,
+                        None,
                     );
                 }
             }
-            Stmt::Return { expr, .. } => {
+            Stmt::Return { expr, span } => {
                 let expected_return = self.context.current_method_return.clone();
 
                 // Type check the return expression (even if there's no expected return type)
@@ -2588,13 +2720,17 @@ impl TypeChecker {
                         // Use expected type for type deduction
                         let expr_type = self.infer_expr_with_expected_type(e, &expected_return);
                         if !expr_type.is_assignable_to(expected) {
-                            self.context.add_error(
+                            let (line, column) = Self::get_expr_span(e);
+                            self.context.add_error_with_location(
                                 format!(
                                     "Return type mismatch: expected {}, got {}",
                                     expected.to_str(),
                                     expr_type.to_str()
                                 ),
-                                0
+                                line,
+                                column,
+                                None,
+                                None,
                             );
                         }
                     } else {
@@ -2604,12 +2740,15 @@ impl TypeChecker {
                     }
                 } else if let Some(expected) = &expected_return {
                     if !matches!(expected, Type::Null | Type::Unknown) {
-                        self.context.add_error(
+                        self.context.add_error_with_location(
                             format!(
                                 "Expected return value of type {}, but no value returned",
                                 expected.to_str()
                             ),
-                            0
+                            span.line,
+                            span.column,
+                            None,
+                            None,
                         );
                     }
                 }
@@ -2620,9 +2759,13 @@ impl TypeChecker {
             Stmt::If { condition, then_branch, else_branch, .. } => {
                 let cond_type = self.infer_expr(condition);
                 if cond_type != Type::Bool && cond_type != Type::Unknown {
-                    self.context.add_error(
+                    let (line, column) = Self::get_expr_span(condition);
+                    self.context.add_error_with_location(
                         format!("Expected bool condition, got {}", cond_type.to_str()),
-                        0
+                        line,
+                        column,
+                        None,
+                        None,
                     );
                 }
 
@@ -2648,9 +2791,13 @@ impl TypeChecker {
             Stmt::While { condition, body, .. } => {
                 let cond_type = self.infer_expr(condition);
                 if cond_type != Type::Bool && cond_type != Type::Unknown {
-                    self.context.add_error(
+                    let (line, column) = Self::get_expr_span(condition);
+                    self.context.add_error_with_location(
                         format!("Expected bool condition for while, got {}", cond_type.to_str()),
-                        0
+                        line,
+                        column,
+                        None,
+                        None,
                     );
                 }
                 for stmt in body {
@@ -2692,16 +2839,20 @@ impl TypeChecker {
             if let Some(default_expr) = &field.default {
                 let field_type = Type::from_str(&field.type_name);
                 let expr_type = self.infer_expr_with_expected_type(default_expr, &Some(field_type.clone()));
-                
+
                 if !expr_type.is_assignable_to(&field_type) {
-                    self.context.add_error(
+                    let (line, column) = Self::get_expr_span(default_expr);
+                    self.context.add_error_with_location(
                         format!(
                             "Type mismatch: cannot assign {} to field '{}' of type {}",
                             expr_type.to_str(),
                             field.name,
                             field_type.to_str()
                         ),
-                        0
+                        line,
+                        column,
+                        None,
+                        None,
                     );
                 }
             }
@@ -2912,7 +3063,7 @@ impl TypeChecker {
                     Type::Unknown
                 }
             }
-            Expr::Binary { left, op, right, .. } => {
+            Expr::Binary { left, op, right, span } => {
                 let left_type = self.infer_expr(left);
                 let right_type = self.infer_expr(right);
 
@@ -2920,31 +3071,45 @@ impl TypeChecker {
                 match op {
                     crate::parser::BinaryOp::Equal | crate::parser::BinaryOp::NotEqual => {
                         // Equality can be checked between any types, but they should match
-                        if left_type != right_type &&
-                           left_type != Type::Unknown &&
-                           right_type != Type::Unknown {
-                            self.context.add_error(
+                        // Special case: optional types (T?) can be compared with null
+                        let is_valid_comparison = left_type == right_type
+                            || left_type == Type::Unknown
+                            || right_type == Type::Unknown
+                            || matches!(&left_type, Type::Optional(_)) && right_type == Type::Null
+                            || matches!(&right_type, Type::Optional(_)) && left_type == Type::Null;
+                        
+                        if !is_valid_comparison {
+                            self.context.add_error_with_location(
                                 format!(
                                     "Cannot compare {} with {} using equality operator",
                                     left_type.to_str(),
                                     right_type.to_str()
                                 ),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         Type::Bool
                     }
                     crate::parser::BinaryOp::And | crate::parser::BinaryOp::Or => {
                         if left_type != Type::Bool && left_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected bool for logical operator, got {}", left_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         if right_type != Type::Bool && right_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected bool for logical operator, got {}", right_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         Type::Bool
@@ -2958,15 +3123,21 @@ impl TypeChecker {
 
                         // Arithmetic operations require numeric types
                         if !is_numeric_type(&left_type) && left_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for arithmetic operation, got {}", left_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         if !is_numeric_type(&right_type) && right_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for arithmetic operation, got {}", right_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         // Result type is the more precise type (float > int)
@@ -2986,15 +3157,21 @@ impl TypeChecker {
                     crate::parser::BinaryOp::Pow => {
                         // Power operation requires numeric types and returns float
                         if !is_numeric_type(&left_type) && left_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for power operation, got {}", left_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         if !is_numeric_type(&right_type) && right_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for power operation, got {}", right_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         Type::Float
@@ -3003,15 +3180,21 @@ impl TypeChecker {
                     crate::parser::BinaryOp::GreaterEqual | crate::parser::BinaryOp::LessEqual => {
                         // Comparison operations require numeric types and return bool
                         if !is_numeric_type(&left_type) && left_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for comparison, got {}", left_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         if !is_numeric_type(&right_type) && right_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for comparison, got {}", right_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         Type::Bool
@@ -3021,15 +3204,21 @@ impl TypeChecker {
                     crate::parser::BinaryOp::ShiftRight => {
                         // Bitwise operations require integer types
                         if !is_integer_type(&left_type) && left_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected integer type for bitwise operation, got {}", left_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         if !is_integer_type(&right_type) && right_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected integer type for bitwise operation, got {}", right_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         // For shift operators, the right operand should be an integer (shift amount)
@@ -3060,14 +3249,17 @@ impl TypeChecker {
                     }
                 }
             }
-            Expr::Unary { op, expr, .. } => {
+            Expr::Unary { op, expr, span } => {
                 let inner_type = self.infer_expr(expr);
                 match op {
                     crate::parser::UnaryOp::Not => {
                         if inner_type != Type::Bool && inner_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected bool for ! operator, got {}", inner_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         Type::Bool
@@ -3075,9 +3267,12 @@ impl TypeChecker {
                     crate::parser::UnaryOp::BitNot => {
                         // Bitwise NOT requires integer types
                         if !is_integer_type(&inner_type) && inner_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected integer type for bitwise NOT, got {}", inner_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         // Result type is the same as operand type
@@ -3091,9 +3286,12 @@ impl TypeChecker {
                     crate::parser::UnaryOp::Negate => {
                         // Negation works on numeric types and returns the same type
                         if inner_type != Type::Int && inner_type != Type::Float && !inner_type.is_numeric() && inner_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for unary minus, got {}", inner_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         inner_type
@@ -3101,9 +3299,12 @@ impl TypeChecker {
                     crate::parser::UnaryOp::PrefixIncrement | crate::parser::UnaryOp::PostfixIncrement => {
                         // Increment operator works on numeric types and returns the original type
                         if !inner_type.is_numeric() && inner_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for ++ operator, got {}", inner_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         inner_type
@@ -3111,9 +3312,12 @@ impl TypeChecker {
                     crate::parser::UnaryOp::PrefixDecrement | crate::parser::UnaryOp::PostfixDecrement | crate::parser::UnaryOp::Decrement => {
                         // Decrement operator works on numeric types and returns the original type
                         if !inner_type.is_numeric() && inner_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Expected numeric type for -- operator, got {}", inner_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                         inner_type
@@ -3127,8 +3331,49 @@ impl TypeChecker {
                 } else {
                     ("", span)
                 };
-                
+
                 if !func_name.is_empty() {
+                    // Check if this is a variable with a function type (e.g., lambda variable)
+                    // or a variable of type 'any' (which can be called dynamically)
+                    let var_info_and_type = self.context.get_variable(func_name)
+                        .map(|var_info| (var_info.type_name.clone(), var_info.name.clone()));
+                    
+                    if let Some((var_type, _var_name)) = var_info_and_type {
+                        if let Type::Function(param_types, return_type) = &var_type {
+                            // This is a variable of function type - check the call
+                            let arg_types: Vec<Type> = args.iter()
+                                .map(|arg| self.infer_expr(arg))
+                                .collect();
+
+                            // Check argument count
+                            if param_types.len() != arg_types.len() {
+                                self.context.add_error_with_location(
+                                    format!("Function expects {} argument(s), got {}", param_types.len(), arg_types.len()),
+                                    span.line, span.column, None, None
+                                );
+                            } else {
+                                // Check argument types
+                                for (i, (param_type, arg_type)) in param_types.iter().zip(arg_types.iter()).enumerate() {
+                                    if !arg_type.is_assignable_to(param_type) && *param_type != Type::Unknown && *arg_type != Type::Unknown {
+                                        self.context.add_error_with_location(
+                                            format!("Argument {}: expected {}, got {}", i + 1, param_type.to_str(), arg_type.to_str()),
+                                            span.line, span.column, None, None
+                                        );
+                                    }
+                                }
+                            }
+
+                            return return_type.as_ref().clone();
+                        } else if var_type == Type::Any {
+                            // Variable of type 'any' can be called dynamically (no type checking)
+                            // Infer argument types but don't check them
+                            for arg in args {
+                                self.infer_expr(arg);
+                            }
+                            return Type::Any;
+                        }
+                    }
+
                     // Check if this is a generic function call like identity<T>(args)
                     let (base_func_name, type_args_str) = Self::parse_generic_function_name(func_name);
 
@@ -3165,6 +3410,7 @@ impl TypeChecker {
                                         type_name: p.type_name.as_ref().map(|t|
                                             self.context.substitute_type_params(t, &type_args, &sig.type_params)
                                         ),
+                                        default: false,
                                     }
                                 }).collect();
 
@@ -3185,7 +3431,7 @@ impl TypeChecker {
                                     mangled_name: sig.mangled_name.clone(),
                                 };
 
-                                self.check_function_call(&substituted_sig, args, func_name);
+                                self.check_function_call(&substituted_sig, args, func_name, func_span.line, func_span.column);
 
                                 return substituted_sig.return_type.clone().unwrap_or(Type::Unknown);
                             }
@@ -3203,7 +3449,7 @@ impl TypeChecker {
                     // Use resolve_function_call for proper overload resolution
                     let func_sig = self.context.resolve_function_call(func_name, &arg_types);
                     if let Some(sig) = func_sig.cloned() {
-                        self.check_function_call(&sig, args, func_name);
+                        self.check_function_call(&sig, args, func_name, func_span.line, func_span.column);
                         sig.return_type.clone().unwrap_or(Type::Unknown)
                     } else {
                         // Function not found or no matching overload
@@ -3303,6 +3549,7 @@ impl TypeChecker {
                                                 crate::types::ParamSignature {
                                                     name: p.name.clone(),
                                                     type_name: substituted_type,
+                                                    default: false,
                                                 }
                                             }).collect();
                                             
@@ -3346,13 +3593,13 @@ impl TypeChecker {
                                                     type_params: sig.type_params.clone(),
                                                     mangled_name: sig.mangled_name.clone(),
                                                 };
-                                                self.check_method_call(&substituted_sig, args, "constructor", &base_class_name);
+                                                self.check_method_call(&substituted_sig, args, "constructor", &base_class_name, span.line, span.column);
                                                 break;
                                             }
                                         }
                                     }
                                 }
-                                
+
                                 if !found_matching_ctor && !args.is_empty() {
                                     self.context.add_error_with_location(
                                         format!("Class '{}' does not accept constructor arguments", base_class_name),
@@ -3364,7 +3611,7 @@ impl TypeChecker {
                             // Non-generic class - use normal resolution
                             let ctor_sig = self.context.resolve_method_call(&base_class_name, "constructor", &arg_types);
                             if let Some(sig) = ctor_sig.cloned() {
-                                self.check_method_call(&sig, args, "constructor", &base_class_name);
+                                self.check_method_call(&sig, args, "constructor", &base_class_name, span.line, span.column);
                             } else if !args.is_empty() {
                                 self.context.add_error_with_location(
                                     format!("Class '{}' does not accept constructor arguments", base_class_name),
@@ -3391,7 +3638,7 @@ impl TypeChecker {
                                     .collect();
                                 let ctor_sig = self.context.resolve_method_call(&nested_class_name, "constructor", &arg_types);
                                 if let Some(sig) = ctor_sig.cloned() {
-                                    self.check_method_call(&sig, args, "constructor", &nested_class_name);
+                                    self.check_method_call(&sig, args, "constructor", &nested_class_name, method_span.line, method_span.column);
                                 } else if !args.is_empty() {
                                     self.context.add_error_with_location(
                                         format!("Class '{}' does not accept constructor arguments", nested_class_name),
@@ -3434,7 +3681,7 @@ impl TypeChecker {
                                 self.context.add_error_with_location(err, method_span.line, method_span.column, None, None);
                             }
 
-                            self.check_method_call(&sig, args, name, &class_name);
+                            self.check_method_call(&sig, args, name, &class_name, method_span.line, method_span.column);
                             return sig.return_type.clone().unwrap_or(Type::Unknown);
                         } else if !matches!(object_type, Type::Class(_)) {
                             // If it's a built-in type and method not found, don't fallback to module lookup
@@ -3445,7 +3692,7 @@ impl TypeChecker {
                             return Type::Unknown;
                         }
                     }
-                    
+
                     if let Expr::Variable { name: module_name, .. } = object.as_ref() {
                         // This is module.function() call - look up qualified name
                         // Try to resolve as a qualified module function
@@ -3454,7 +3701,7 @@ impl TypeChecker {
                             let _arg_types: Vec<Type> = args.iter()
                                 .map(|arg| self.infer_expr(arg))
                                 .collect();
-                            self.check_function_call(&sig, args, &sig.name);
+                            self.check_function_call(&sig, args, &sig.name, method_span.line, method_span.column);
                             return sig.return_type.clone().unwrap_or(Type::Unknown);
                         } else if let Some(qualified_class_name) = self.context.resolve_qualified_class(module_name, name) {
                             // It's a qualified class instantiation
@@ -3463,7 +3710,7 @@ impl TypeChecker {
                                 .collect();
                             let ctor_sig = self.context.resolve_method_call(&qualified_class_name, "constructor", &arg_types);
                             if let Some(sig) = ctor_sig.cloned() {
-                                self.check_method_call(&sig, args, "constructor", &qualified_class_name);
+                                self.check_method_call(&sig, args, "constructor", &qualified_class_name, method_span.line, method_span.column);
                             } else if !args.is_empty() {
                                 self.context.add_error_with_location(
                                     format!("Class '{}' does not accept constructor arguments", qualified_class_name),
@@ -3735,34 +3982,40 @@ impl TypeChecker {
                 }
                 Type::Int
             }
-            Expr::Cast { expr, target_type, .. } => {
+            Expr::Cast { expr, target_type, span } => {
                 // Type check the inner expression
                 let inner_type = self.infer_expr(expr);
-                
+
                 // Validate cast is reasonable (allow most casts, warn about nonsensical ones)
                 match target_type {
-                    CastType::Int | CastType::Int8 | CastType::UInt8 | CastType::Int16 | CastType::UInt16 | 
+                    CastType::Int | CastType::Int8 | CastType::UInt8 | CastType::Int16 | CastType::UInt16 |
                     CastType::Int32 | CastType::UInt32 | CastType::Int64 | CastType::UInt64 => {
                         // int() can accept: float, str, bool, int, and other numeric types
-                        if !inner_type.is_numeric() && 
-                           inner_type != Type::Str && 
-                           inner_type != Type::Bool && 
+                        if !inner_type.is_numeric() &&
+                           inner_type != Type::Str &&
+                           inner_type != Type::Bool &&
                            inner_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Cannot cast {} to integer type", inner_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                     }
                     CastType::Float | CastType::Float32 | CastType::Float64 => {
                         // float() can accept: int, str, bool, float, and other numeric types
-                        if !inner_type.is_numeric() && 
-                           inner_type != Type::Str && 
+                        if !inner_type.is_numeric() &&
+                           inner_type != Type::Str &&
                            inner_type != Type::Bool &&
                            inner_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Cannot cast {} to float type", inner_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                     }
@@ -3771,13 +4024,16 @@ impl TypeChecker {
                     }
                     CastType::Bool => {
                         // bool() can accept: int, float, str, bool
-                        if !inner_type.is_numeric() && 
+                        if !inner_type.is_numeric() &&
                            inner_type != Type::Str &&
                            inner_type != Type::Bool &&
                            inner_type != Type::Unknown {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!("Cannot cast {} to bool", inner_type.to_str()),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
                     }
@@ -3814,14 +4070,17 @@ impl TypeChecker {
                 }
                 Type::Array(Box::new(element_type))
             }
-            Expr::Index { object, index, .. } => {
+            Expr::Index { object, index, span } => {
                 let object_type = self.infer_expr(object);
                 let index_type = self.infer_expr(index);
 
                 if index_type != Type::Int && index_type != Type::Unknown {
-                    self.context.add_error(
+                    self.context.add_error_with_location(
                         format!("Array index must be an integer, got {}", index_type.to_str()),
-                        0
+                        span.line,
+                        span.column,
+                        None,
+                        None,
                     );
                 }
 
@@ -3830,9 +4089,12 @@ impl TypeChecker {
                     Type::Str => Type::Str,
                     Type::Unknown => Type::Unknown,
                     _ => {
-                        self.context.add_error(
+                        self.context.add_error_with_location(
                             format!("Type {} does not support indexing", object_type.to_str()),
-                            0
+                            span.line,
+                            span.column,
+                            None,
+                            None,
                         );
                         Type::Unknown
                     }
@@ -4055,20 +4317,27 @@ impl TypeChecker {
                                     let field_value_type = self.infer_expr_with_expected_type(&field.value, &Some(expected_field_type.clone()));
 
                                     if !field_value_type.is_assignable_to(&expected_field_type) {
-                                        self.context.add_error(
+                                        let (line, column) = Self::get_expr_span(&field.value);
+                                        self.context.add_error_with_location(
                                             format!(
                                                 "Field '{}' has wrong type: expected {}, got {}",
                                                 field.name,
                                                 expected_field_type.to_str(),
                                                 field_value_type.to_str()
                                             ),
-                                            0
+                                            line,
+                                            column,
+                                            None,
+                                            None,
                                         );
                                     }
                                 } else {
-                                    self.context.add_error(
+                                    self.context.add_error_with_location(
                                         format!("Unknown field '{}' for class '{}'", field.name, class_name),
-                                        0
+                                        span.line,
+                                        span.column,
+                                        None,
+                                        None,
                                     );
                                 }
                             }
@@ -4085,19 +4354,22 @@ impl TypeChecker {
                 }
                 Type::Unknown
             }
-            Expr::Lambda { params, return_type: _, body, .. } => {
+            Expr::Lambda { params, return_type: _, body, span } => {
                 // Type check lambda with expected function type
                 if let Some(expected) = expected_type {
                     if let Type::Function(expected_params, expected_return) = expected {
                         // Verify parameter count matches
                         if params.len() != expected_params.len() {
-                            self.context.add_error(
+                            self.context.add_error_with_location(
                                 format!(
                                     "Lambda expects {} parameters, but {} were provided",
                                     expected_params.len(),
                                     params.len()
                                 ),
-                                0
+                                span.line,
+                                span.column,
+                                None,
+                                None,
                             );
                         }
 
@@ -4143,17 +4415,36 @@ impl TypeChecker {
         }
     }
 
-    fn check_function_call(&mut self, func_sig: &FunctionSignature, args: &[Expr], func_name: &str) {
-        // Check argument count
-        if args.len() != func_sig.params.len() {
-            self.context.add_error(
+    fn check_function_call(&mut self, func_sig: &FunctionSignature, args: &[Expr], func_name: &str, span_line: usize, span_column: usize) {
+        // Check argument count - allow fewer args if remaining params have defaults
+        let min_args = func_sig.params.iter().position(|p| p.default).unwrap_or(func_sig.params.len());
+        if args.len() > func_sig.params.len() {
+            self.context.add_error_with_location(
                 format!(
                     "Function '{}' expects {} arguments, got {}",
                     func_name,
                     func_sig.params.len(),
                     args.len()
                 ),
-                0
+                span_line,
+                span_column,
+                None,
+                None,
+            );
+            return;
+        }
+        if args.len() < min_args {
+            self.context.add_error_with_location(
+                format!(
+                    "Function '{}' requires at least {} arguments, got {}",
+                    func_name,
+                    min_args,
+                    args.len()
+                ),
+                span_line,
+                span_column,
+                None,
+                None,
             );
             return;
         }
@@ -4164,7 +4455,8 @@ impl TypeChecker {
 
             if let Some(expected_type) = &param.type_name {
                 if !arg_type.is_assignable_to(expected_type) && arg_type != Type::Unknown {
-                    self.context.add_error(
+                    let (line, column) = Self::get_expr_span(arg);
+                    self.context.add_error_with_location(
                         format!(
                             "Argument {} of function '{}' has wrong type: expected {}, got {}",
                             i + 1,
@@ -4172,17 +4464,21 @@ impl TypeChecker {
                             expected_type.to_str(),
                             arg_type.to_str()
                         ),
-                        0
+                        line,
+                        column,
+                        None,
+                        None,
                     );
                 }
             }
         }
     }
 
-    fn check_method_call(&mut self, method_sig: &MethodSignature, args: &[Expr], method_name: &str, class_name: &str) {
-        // Check argument count (excluding self)
-        if args.len() != method_sig.params.len() {
-            self.context.add_error(
+    fn check_method_call(&mut self, method_sig: &MethodSignature, args: &[Expr], method_name: &str, class_name: &str, span_line: usize, span_column: usize) {
+        // Check argument count - allow fewer args if remaining params have defaults
+        let min_args = method_sig.params.iter().position(|p| p.default).unwrap_or(method_sig.params.len());
+        if args.len() > method_sig.params.len() {
+            self.context.add_error_with_location(
                 format!(
                     "Method '{}' on class '{}' expects {} arguments, got {}",
                     method_name,
@@ -4190,7 +4486,26 @@ impl TypeChecker {
                     method_sig.params.len(),
                     args.len()
                 ),
-                0
+                span_line,
+                span_column,
+                None,
+                None,
+            );
+            return;
+        }
+        if args.len() < min_args {
+            self.context.add_error_with_location(
+                format!(
+                    "Method '{}' on class '{}' requires at least {} arguments, got {}",
+                    method_name,
+                    class_name,
+                    min_args,
+                    args.len()
+                ),
+                span_line,
+                span_column,
+                None,
+                None,
             );
             return;
         }
@@ -4201,7 +4516,8 @@ impl TypeChecker {
 
             if let Some(expected_type) = &param.type_name {
                 if !arg_type.is_assignable_to(expected_type) && arg_type != Type::Unknown {
-                    self.context.add_error(
+                    let (line, column) = Self::get_expr_span(arg);
+                    self.context.add_error_with_location(
                         format!(
                             "Argument {} of method '{}' has wrong type: expected {}, got {}",
                             i + 1,
@@ -4209,7 +4525,10 @@ impl TypeChecker {
                             expected_type.to_str(),
                             arg_type.to_str()
                         ),
-                        0
+                        line,
+                        column,
+                        None,
+                        None,
                     );
                 }
             }
