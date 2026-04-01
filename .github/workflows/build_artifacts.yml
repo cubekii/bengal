@@ -48,7 +48,7 @@ jobs:
 
       - name: Upload .deb to release
         if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@v5
+        uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/debian/*.deb
@@ -99,7 +99,7 @@ jobs:
 
       - name: Upload .rpm to release
         if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@v5
+        uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/generate-rpm/*.rpm
@@ -157,7 +157,7 @@ jobs:
 
       - name: Upload .pkg.tar.zst to release
         if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@v5
+        uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: bengal.pkg.tar.zst
@@ -215,7 +215,7 @@ jobs:
 
       - name: Upload .tar.gz to release
         if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@v5
+        uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: bengal.tar.gz
@@ -268,7 +268,7 @@ jobs:
 
       - name: Upload .zip to release
         if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@v5
+        uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: bengal-darwin-${{ matrix.arch }}.zip
@@ -310,7 +310,7 @@ jobs:
 
       - name: Upload .exe to release
         if: github.event_name == 'release'
-        uses: svenstaro/upload-release-action@v5
+        uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: target/${{ matrix.arch == 'amd64' && 'x86_64-pc-windows-msvc' || 'aarch64-pc-windows-msvc' }}/release/bengal.exe
