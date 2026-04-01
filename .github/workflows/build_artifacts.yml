@@ -8,6 +8,9 @@ env:
 jobs:
   build-debian:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
 
@@ -21,7 +24,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-debian-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-debian-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install cargo-deb
         run: cargo install cargo-deb
@@ -37,7 +40,7 @@ jobs:
       - name: Upload Debian artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bengal-debian
+          name: bengal-debian-${{ matrix.arch }}
           path: target/debian/*.deb
           retention-days: 30
 
@@ -53,6 +56,9 @@ jobs:
 
   build-rpm:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
 
@@ -66,7 +72,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-rpm-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-rpm-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install cargo-generate-rpm
         run: cargo install cargo-generate-rpm
@@ -85,7 +91,7 @@ jobs:
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bengal-rpm
+          name: bengal-rpm-${{ matrix.arch }}
           path: target/generate-rpm/*.rpm
           retention-days: 30
 
@@ -101,6 +107,9 @@ jobs:
 
   build-archlinux:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
 
@@ -114,7 +123,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-arch-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-arch-${{ matrix.arch }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install build dependencies
         run: |
@@ -140,7 +149,7 @@ jobs:
       - name: Upload Arch Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: bengal-archlinux
+          name: bengal-archlinux-${{ matrix.arch }}
           path: bengal.pkg.tar.zst
           retention-days: 30
 
