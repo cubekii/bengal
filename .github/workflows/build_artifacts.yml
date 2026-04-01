@@ -257,23 +257,21 @@ jobs:
           chmod 755 artifacts/usr/bin/bengal
           chmod 644 artifacts/usr/share/licenses/bengal/LICENSE
           cd artifacts
-          tar -cvf ../bengal-darwin-${{ matrix.arch }}.tar usr
-          cd ..
-          gzip -9 bengal-darwin-${{ matrix.arch }}.tar
+          zip -r ../bengal-darwin-${{ matrix.arch }}.zip usr
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v5
         with:
           name: bengal-macos-${{ matrix.arch }}
-          path: bengal-darwin-${{ matrix.arch }}.tar.gz
+          path: bengal-darwin-${{ matrix.arch }}.zip
           retention-days: 30
 
-      - name: Upload .tar.gz to release
+      - name: Upload .zip to release
         if: github.event_name == 'release'
         uses: svenstaro/upload-release-action@v5
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: bengal-darwin-${{ matrix.arch }}.tar.gz
+          file: bengal-darwin-${{ matrix.arch }}.zip
           tag: ${{ github.ref }}
 
   build-windows:
