@@ -328,11 +328,11 @@ jobs:
       - name: Create Windows package
         run: |
           mkdir -p artifacts/bin
-          mkdir -p artifacts/share/bengal/std
+          mkdir -p artifacts/std
           cp target/${{ matrix.arch == 'amd64' && 'x86_64-pc-windows-msvc' || 'aarch64-pc-windows-msvc' }}/release/bengal.exe artifacts/bin/
-          cp std/*.bl artifacts/share/bengal/std/
+          cp std/*.bl artifacts/std/
           cd artifacts
-          zip -r ../bengal-windows-${{ matrix.arch }}.zip bin share
+          zip -r ../bengal-windows-${{ matrix.arch }}.zip bin std
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v5
