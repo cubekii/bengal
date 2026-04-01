@@ -31,12 +31,6 @@ jobs:
           sudo apt update
           sudo apt install -y pkg-config libssl-dev
 
-      - name: Build Debian package
-        run: cargo deb
-
-      - name: Build release binary
-        run: cargo build --release
-
       - name: Build Debian package (with build)
         run: cargo deb --release
 
